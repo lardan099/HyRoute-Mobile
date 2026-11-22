@@ -70,11 +70,31 @@ struct Subscription: Decodable, Identifiable {
   let title: String?
   let servers: [VPNProfile]
   let canRefresh: Bool?
+  let usedBytes: Int64?
+  let limitBytes: Int64?
+  let expiresAt: Int64?
+  let refreshedAt: Int64?
+  let attemptedAt: Int64?
+  let refreshFailed: Bool?
 
   var name: String {
     guard let title, !title.isEmpty else { return "Импортированные серверы" }
     return title
   }
+}
+
+struct RoutingProfile: Decodable, Identifiable {
+  let id: String
+  let name: String
+  let ruleCount: Int
+}
+
+struct CheckedRoute: Decodable {
+  let target: String
+  let action: RouteAction
+  let rule: String
+  let chain: [String]?
+  let notes: [String]?
 }
 
 struct RouteRule: Codable {
@@ -144,6 +164,16 @@ struct ClientSettings: Codable {
 struct ClientState: Decodable {
   var subscriptions: [Subscription] = []
   var settings = ClientSettings()
+  var activeRoutingProfile: String?
+  var routingProfiles: [RoutingProfile]?
+
+  var ruleSets: [RoutingProfile] {
+    routingProfiles ?? [RoutingProfile(id: "default", name: "Основной", ruleCount: settings.routing.rules.count)]
+  }
+
+  var activeRuleSet: RoutingProfile? {
+    ruleSets.first { $0.id == (activeRoutingProfile ?? "default") }
+  }
 
   var profiles: [VPNProfile] {
     let active = subscriptions.flatMap(\.servers).filter { $0.missing != true }

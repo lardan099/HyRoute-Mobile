@@ -28,6 +28,20 @@ abstract interface class MaintenanceControl {
   Future<bool> importGeoFile(String kind);
 }
 
+abstract interface class RoutingControl {
+  Future<ClientState> changeRoutingProfile(
+    String operation, {
+    String id = '',
+    String name = '',
+  });
+  Future<CheckedRoute> checkRoute(
+    String address, {
+    required String ip,
+    required String protocol,
+    required String packageID,
+  });
+}
+
 abstract interface class DiagnosticsControl {
   Future<List<String>> vpnJournal();
   Future<ProbeSnapshot> startProbe(String scope, String id);
@@ -52,7 +66,12 @@ class ProbeSnapshot {
 }
 
 class PlatformCore
-    implements ClientCore, VPNControl, DiagnosticsControl, MaintenanceControl {
+    implements
+        ClientCore,
+        VPNControl,
+        DiagnosticsControl,
+        MaintenanceControl,
+        RoutingControl {
   const PlatformCore();
 
   static const _channel = MethodChannel('io.hyroute/core');
@@ -130,6 +149,36 @@ class PlatformCore
   }
 
   @override
+  Future<ClientState> changeRoutingProfile(
+    String operation, {
+    String id = '',
+    String name = '',
+  }) async => ClientState.decode(
+    await _channel.invokeMethod<String>('changeRoutingProfile', {
+      'operation': operation,
+      'id': id,
+      'name': name,
+    }),
+  );
+
+  @override
+  Future<CheckedRoute> checkRoute(
+    String address, {
+    required String ip,
+    required String protocol,
+    required String packageID,
+  }) async {
+    final result = await _channel.invokeMethod<String>('checkRoute', {
+      'address': address,
+      'ip': ip,
+      'protocol': protocol,
+      'package': packageID,
+    });
+    if (result == null) throw const FormatException('Missing route');
+    return CheckedRoute.fromJson(jsonDecode(result) as Map<String, dynamic>);
+  }
+
+  @override
   Future<List<String>> geoTags() async {
     final raw = await _channel.invokeMethod<String>('geoTags');
     if (raw == null) throw const FormatException('Missing geodata');
@@ -202,6 +251,12 @@ class Subscription {
     required this.servers,
     this.title = '',
     this.canRefresh = false,
+    this.usedBytes,
+    this.limitBytes,
+    this.expiresAt,
+    this.refreshedAt,
+    this.attemptedAt,
+    this.refreshFailed = false,
   });
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
@@ -214,6 +269,12 @@ class Subscription {
       servers: servers,
       title: json['title'] as String? ?? '',
       canRefresh: json['canRefresh'] == true,
+      usedBytes: json['usedBytes'] as int?,
+      limitBytes: json['limitBytes'] as int?,
+      expiresAt: json['expiresAt'] as int?,
+      refreshedAt: json['refreshedAt'] as int?,
+      attemptedAt: json['attemptedAt'] as int?,
+      refreshFailed: json['refreshFailed'] == true,
     );
   }
 
@@ -221,12 +282,58 @@ class Subscription {
   final String id;
   final String title;
   final bool canRefresh;
+  final int? usedBytes;
+  final int? limitBytes;
+  final int? expiresAt;
+  final int? refreshedAt;
+  final int? attemptedAt;
+  final bool refreshFailed;
+}
+
+class RoutingProfile {
+  const RoutingProfile(this.id, this.name, this.ruleCount);
+
+  factory RoutingProfile.fromJson(Map<String, dynamic> json) => RoutingProfile(
+    json['id'] as String,
+    json['name'] as String,
+    json['ruleCount'] as int,
+  );
+
+  final String id;
+  final String name;
+  final int ruleCount;
+}
+
+class CheckedRoute {
+  const CheckedRoute({
+    required this.target,
+    required this.action,
+    required this.rule,
+    this.chain = const [],
+    this.notes = const [],
+  });
+
+  factory CheckedRoute.fromJson(Map<String, dynamic> json) => CheckedRoute(
+    target: json['target'] as String,
+    action: RouteAction.fromValue(json['action']),
+    rule: json['rule'] as String,
+    chain: (json['chain'] as List<dynamic>? ?? const []).cast<String>(),
+    notes: (json['notes'] as List<dynamic>? ?? const []).cast<String>(),
+  );
+
+  final String target;
+  final RouteAction action;
+  final String rule;
+  final List<String> chain;
+  final List<String> notes;
 }
 
 class ClientState {
   const ClientState({
     this.subscriptions = const [],
     this.settings = const ClientSettings(),
+    this.routingProfiles = const [],
+    this.activeRoutingProfile = 'default',
   });
 
   factory ClientState.decode(String? raw) {
@@ -239,11 +346,18 @@ class ClientState {
       settings: ClientSettings.fromJson(
         json['settings'] as Map<String, dynamic>,
       ),
+      routingProfiles: (json['routingProfiles'] as List<dynamic>? ?? const [])
+          .map((item) => RoutingProfile.fromJson(item as Map<String, dynamic>))
+          .toList(growable: false),
+      activeRoutingProfile:
+          json['activeRoutingProfile'] as String? ?? 'default',
     );
   }
 
   final List<Subscription> subscriptions;
   final ClientSettings settings;
+  final List<RoutingProfile> routingProfiles;
+  final String activeRoutingProfile;
 }
 
 class ClientSettings {

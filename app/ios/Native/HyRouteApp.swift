@@ -122,6 +122,7 @@ private struct RootView: View {
     .task {
       guard !client.ready else { return }
       #if targetEnvironment(simulator)
+      if previewScreen == "routes-test", await client.loadRoutingFixture() { return }
       if let previewScreen, client.loadLayoutPreview() {
         if previewScreen == "servers" { tab = .subscriptions }
         if ["rules", "routing", "chains"].contains(previewScreen) { tab = .rules }
@@ -450,6 +451,9 @@ private struct SubscriptionPage: View {
           if measurementError {
             Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
               .accessibilityIdentifier("subscription-probe-error")
+          }
+          if item.canRefresh == true || item.usedBytes != nil || item.limitBytes != nil || item.expiresAt != nil {
+            SubscriptionDetails(item: item)
           }
           LazyVStack(spacing: 0) {
             ForEach(item.servers) { profile in

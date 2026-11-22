@@ -21,8 +21,22 @@ NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings) {
 
 NSString * _Nullable HyRouteRefreshSubscription(NSString *state, NSString *subscriptionID) {
     NSError *error = nil;
-    NSString *updated = MobileRefreshClientSubscription(state, subscriptionID, &error);
+    NSString *updated = MobileAttemptClientSubscriptionRefresh(state, subscriptionID, &error);
     return error == nil ? updated : nil;
+}
+
+NSString * _Nullable HyRouteChangeRoutingProfile(NSString *state, NSString *operation, NSString *profileID, NSString *name, NSString * _Nullable * _Nonnull issue) {
+    NSError *error = nil;
+    NSString *updated = MobileChangeRoutingProfile(state, operation, profileID, name, &error);
+    *issue = error.localizedDescription;
+    return error == nil ? updated : nil;
+}
+
+NSString * _Nullable HyRouteCheckClientRoute(NSString *state, NSString *address, NSString *ip, NSString *transport, NSString * _Nullable * _Nonnull issue) {
+    NSError *error = nil;
+    NSString *route = MobileCheckClientRoute(state, address, ip, transport, @"", NO, &error);
+    *issue = error.localizedDescription;
+    return error == nil ? route : nil;
 }
 
 NSString * _Nullable HyRouteAutoRefreshSubscriptions(NSString *state) {

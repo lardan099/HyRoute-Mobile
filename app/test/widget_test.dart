@@ -142,6 +142,44 @@ class _MaintenanceTestCore extends _DiagnosticsTestCore
   }
 }
 
+class _RoutingTestCore extends _TestCore implements RoutingControl {
+  final changes = <(String, String, String)>[];
+  String? checkedAddress;
+
+  @override
+  Future<ClientState> changeRoutingProfile(
+    String operation, {
+    String id = '',
+    String name = '',
+  }) async {
+    changes.add((operation, id, name));
+    return state = ClientState(
+      subscriptions: state.subscriptions,
+      settings: state.settings,
+      routingProfiles: const [
+        RoutingProfile('default', 'Основной', 0),
+        RoutingProfile('work', 'Работа', 0),
+      ],
+      activeRoutingProfile: operation == 'copy' ? 'work' : id,
+    );
+  }
+
+  @override
+  Future<CheckedRoute> checkRoute(
+    String address, {
+    required String ip,
+    required String protocol,
+    required String packageID,
+  }) async {
+    checkedAddress = address;
+    return const CheckedRoute(
+      target: 'example.org:443',
+      action: RouteAction.direct,
+      rule: 'Сайт без VPN',
+    );
+  }
+}
+
 Future<_TestCore> _openApp(WidgetTester tester, {_TestCore? core}) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
@@ -174,6 +212,58 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('opens route checking and copies a named rule profile', (
+    tester,
+  ) async {
+    final core = _RoutingTestCore();
+    await _openApp(tester, core: core);
+    await _tap(tester, 'Правила');
+    await _tap(tester, 'Профили правил');
+    await _tap(tester, 'Создать копию текущего');
+    await tester.enterText(find.byType(TextFormField), 'Работа');
+    await _tap(tester, 'Сохранить');
+    expect(core.changes.single, ('copy', '', 'Работа'));
+    await _tap(tester, 'Основной');
+    expect(core.changes.last, ('activate', 'default', ''));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Проверить адрес');
+    await tester.enterText(find.byType(TextField), 'example.org');
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Проверить');
+    expect(core.checkedAddress, 'example.org');
+    expect(find.text('Сайт без VPN'), findsOneWidget);
+  });
+
+  testWidgets('shows quota and failed refresh while retaining the server', (
+    tester,
+  ) async {
+    final core = _TestCore()
+      ..state = const ClientState(
+        subscriptions: [
+          Subscription(
+            id: 'quota',
+            title: 'Подписка с лимитом',
+            canRefresh: true,
+            usedBytes: 1 << 30,
+            limitBytes: 10 << 30,
+            refreshedAt: 1795400000,
+            attemptedAt: 1795400100,
+            refreshFailed: true,
+            servers: [
+              Server(id: 'demo', name: 'Рабочий сервер', protocol: 'VLESS'),
+            ],
+          ),
+        ],
+      );
+    await _openApp(tester, core: core);
+    await _tap(tester, 'Подписки');
+    await _tap(tester, 'Подписка с лимитом');
+    expect(find.text('1 ГиБ из 10 ГиБ'), findsOneWidget);
+    expect(find.textContaining('Обновление не удалось'), findsOneWidget);
+    expect(find.text('Рабочий сервер'), findsOneWidget);
+  });
+
   testWidgets('configures a separate HTTPS source and local GeoIP file', (
     tester,
   ) async {

@@ -72,6 +72,46 @@ func TestAutomaticSubscriptionRefreshPreservesFailuresAndLocalInputs(t *testing.
 	}
 }
 
+func TestSubscriptionCardShowsUsageAndPersistsFailedAttempt(t *testing.T) {
+	const server = "vless://test-user@regular.example:443?security=tls#Regular"
+	raw, err := AddClientSubscription("", server, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeClientState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := state.Subscriptions[0]
+	now := time.Unix(1795400000, 0)
+	state.Subscriptions[0].URL = "https://example.test/private-token"
+	state.Subscriptions[0].RefreshedAt = now.Unix()
+	state.Subscriptions[0].Snapshot.UserInfo = "upload=2; download=3; total=10; expire=1893456000"
+	updated, err := attemptClientSubscriptionRefresh(state, 0, now, func(string) (string, error) {
+		return "", errors.New("connection failed")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := ClientStateView(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Subscriptions []subscriptionPreview }
+	if err := json.Unmarshal([]byte(view), &got); err != nil {
+		t.Fatal(err)
+	}
+	item := got.Subscriptions[0]
+	if !item.RefreshFailed || item.RefreshedAt != now.Unix() || item.AttemptedAt != now.Unix() ||
+		item.UsedBytes == nil || *item.UsedBytes != 5 || item.LimitBytes == nil || *item.LimitBytes != 10 ||
+		item.ExpiresAt == nil || *item.ExpiresAt != 1893456000 || item.Servers[0].ID != old.Snapshot.Servers[0].ID {
+		t.Fatalf("incorrect subscription summary: %+v", item)
+	}
+	if strings.Contains(view, "private-token") || strings.Contains(view, "test-user") {
+		t.Fatal("subscription details exposed credentials")
+	}
+}
+
 func TestRefreshSnapshotAddsAutoWithoutChangingExistingSelection(t *testing.T) {
 	const ordinary = "vless://test-user@regular.example:443?security=tls#Regular"
 	raw, err := AddClientSubscription("", ordinary, false)

@@ -11,11 +11,12 @@ import (
 )
 
 type savedSubscription struct {
-	ID          string               `json:"id"`
-	URL         string               `json:"url,omitempty"`
-	Snapshot    importedSubscription `json:"snapshot"`
-	RefreshedAt int64                `json:"refreshedAt,omitempty"`
-	AttemptedAt int64                `json:"attemptedAt,omitempty"`
+	ID            string               `json:"id"`
+	URL           string               `json:"url,omitempty"`
+	Snapshot      importedSubscription `json:"snapshot"`
+	RefreshedAt   int64                `json:"refreshedAt,omitempty"`
+	AttemptedAt   int64                `json:"attemptedAt,omitempty"`
+	RefreshFailed bool                 `json:"refreshFailed,omitempty"`
 }
 
 type clientSettings struct {
@@ -26,8 +27,10 @@ type clientSettings struct {
 }
 
 type clientState struct {
-	Subscriptions []savedSubscription `json:"subscriptions,omitempty"`
-	Settings      clientSettings      `json:"settings"`
+	Subscriptions        []savedSubscription `json:"subscriptions,omitempty"`
+	Settings             clientSettings      `json:"settings"`
+	ActiveRoutingProfile string              `json:"activeRoutingProfile,omitempty"`
+	RoutingProfiles      []routingProfile    `json:"routingProfiles,omitempty"`
 }
 
 func decodeClientState(raw string) (clientState, error) {
@@ -107,6 +110,34 @@ func refreshClientSubscription(state clientState, index int) (string, error) {
 	return mergeClientSubscription(state, index, fresh)
 }
 
+// AttemptClientSubscriptionRefresh persists the status of a manual attempt,
+// keeping the last working server list if the request fails.
+func AttemptClientSubscriptionRefresh(raw, subscriptionID string) (string, error) {
+	state, err := decodeClientState(raw)
+	if err != nil {
+		return "", err
+	}
+	for index, item := range state.Subscriptions {
+		if item.ID == subscriptionID && item.URL != "" {
+			return attemptClientSubscriptionRefresh(state, index, time.Now(), FetchSubscription)
+		}
+	}
+	return "", errors.New("ссылка подписки недоступна")
+}
+
+func attemptClientSubscriptionRefresh(state clientState, index int, now time.Time, fetch func(string) (string, error)) (string, error) {
+	item := &state.Subscriptions[index]
+	item.AttemptedAt = now.Unix()
+	fresh, err := fetch(item.URL)
+	if err != nil {
+		item.RefreshFailed = true
+	} else if err := applyRefreshedSubscription(&state, index, fresh, now); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(state)
+	return string(data), err
+}
+
 // AutoRefreshSubscriptions updates due URL subscriptions in the encrypted snapshot.
 func AutoRefreshSubscriptions(raw string) (string, error) {
 	return refreshDueSubscriptions(context.Background(), raw)
@@ -128,6 +159,7 @@ func autoRefreshSubscriptions(ctx context.Context, raw string, now time.Time, fe
 		item.AttemptedAt = now.Unix()
 		fresh, err := fetch(ctx, item.URL)
 		if err != nil {
+			item.RefreshFailed = true
 			continue
 		}
 		if err := applyRefreshedSubscription(&state, index, fresh, now); err != nil {
@@ -151,20 +183,19 @@ func mergeClientSubscription(state clientState, index int, fresh string) (string
 
 func applyRefreshedSubscription(state *clientState, index int, fresh string, now time.Time) error {
 	item := &state.Subscriptions[index]
-	var cfg routingConfig
-	if raw := state.Settings.Routing; len(raw) != 0 {
-		if err := json.Unmarshal(raw, &cfg); err != nil {
+	references := []string{state.Settings.Selected}
+	references, err := appendRoutingReferences(references, state.Settings.Routing)
+	if err != nil {
+		return err
+	}
+	for _, profile := range state.RoutingProfiles {
+		if profile.ID == state.activeRoutingID() {
+			continue
+		}
+		references, err = appendRoutingReferences(references, profile.Routing)
+		if err != nil {
 			return err
 		}
-	}
-	references := []string{state.Settings.Selected}
-	references = append(references, cfg.DefaultFallback...)
-	for _, rule := range cfg.Rules {
-		references = append(references, rule.Profile)
-		references = append(references, rule.Fallback...)
-	}
-	for exit, entry := range cfg.ViaProfiles {
-		references = append(references, exit, entry)
 	}
 	ids, err := json.Marshal(references)
 	if err != nil {
@@ -184,7 +215,27 @@ func applyRefreshedSubscription(state *clientState, index int, fresh string, now
 	}
 	item.RefreshedAt = now.Unix()
 	item.AttemptedAt = now.Unix()
+	item.RefreshFailed = false
 	return nil
+}
+
+func appendRoutingReferences(references []string, raw json.RawMessage) ([]string, error) {
+	var cfg routingConfig
+	if len(raw) != 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+	}
+	references = append(references, cfg.DefaultProfile)
+	references = append(references, cfg.DefaultFallback...)
+	for _, rule := range cfg.Rules {
+		references = append(references, rule.Profile)
+		references = append(references, rule.Fallback...)
+	}
+	for exit, entry := range cfg.ViaProfiles {
+		references = append(references, exit, entry)
+	}
+	return references, nil
 }
 
 // SaveClientSettings validates the routing settings before replacing them.
@@ -245,12 +296,22 @@ func ClientStateView(raw string) (string, error) {
 		return "", err
 	}
 	view := struct {
-		Subscriptions []subscriptionPreview `json:"subscriptions"`
-		Settings      clientSettings        `json:"settings"`
-	}{Subscriptions: make([]subscriptionPreview, 0, len(state.Subscriptions)), Settings: state.Settings}
+		Subscriptions        []subscriptionPreview `json:"subscriptions"`
+		Settings             clientSettings        `json:"settings"`
+		ActiveRoutingProfile string                `json:"activeRoutingProfile"`
+		RoutingProfiles      []routingProfileView  `json:"routingProfiles"`
+	}{
+		Subscriptions:        make([]subscriptionPreview, 0, len(state.Subscriptions)),
+		Settings:             state.Settings,
+		ActiveRoutingProfile: state.activeRoutingID(),
+		RoutingProfiles:      state.routingProfileViews(),
+	}
 	for _, item := range state.Subscriptions {
 		preview := previewSubscription(item.ID, item.Snapshot)
 		preview.CanRefresh = item.URL != ""
+		preview.RefreshedAt = item.RefreshedAt
+		preview.AttemptedAt = item.AttemptedAt
+		preview.RefreshFailed = item.RefreshFailed || item.AttemptedAt > item.RefreshedAt
 		view.Subscriptions = append(view.Subscriptions, preview)
 	}
 	data, err := json.Marshal(view)

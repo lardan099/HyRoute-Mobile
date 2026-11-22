@@ -57,6 +57,10 @@ struct RulesPage: View {
       }
       .pickerStyle(.segmented)
       .accessibilityIdentifier("rules-sections")
+      ViewThatFits(in: .horizontal) {
+        HStack { ruleSetLink; routeCheckLink }
+        VStack(alignment: .leading) { ruleSetLink; routeCheckLink }
+      }
       if !brokenRules.isEmpty || !brokenChains.isEmpty {
         HStack(spacing: 8) {
           Label("Недоступных ссылок: \(brokenRules.count + brokenChains.count)", systemImage: "exclamationmark.circle")
@@ -82,6 +86,27 @@ struct RulesPage: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(HyStyle.canvas)
+  }
+
+  private var ruleSetLink: some View {
+    NavigationLink {
+      RoutingProfilesPage(client: client)
+    } label: {
+      Label(client.state.activeRuleSet?.name ?? "Профили правил", systemImage: "square.stack")
+        .lineLimit(1)
+    }
+    .buttonStyle(.bordered)
+    .accessibilityIdentifier("rule-sets")
+  }
+
+  private var routeCheckLink: some View {
+    NavigationLink {
+      RouteCheckPage(client: client)
+    } label: {
+      Label("Проверить адрес", systemImage: "magnifyingglass")
+    }
+    .buttonStyle(.bordered)
+    .accessibilityIdentifier("route-check")
   }
 
   private var ruleList: some View {

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'core.dart';
 import 'diagnostics.dart';
 import 'editors.dart';
+import 'routing_tools.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key, required this.core});
@@ -23,6 +24,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var _defaultAction = RouteAction.tunnel;
   var _scope = AppScope.all;
   var _packages = <String>[];
+  var _routingProfiles = <RoutingProfile>[];
+  var _activeRoutingProfile = 'default';
   String? _selected;
   int _tab = 0;
   bool _importing = false;
@@ -32,6 +35,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Timer? _vpnTimer;
   Timer? _maintenanceTimer;
   bool _updatingAutomatically = false;
+  int _stateRevision = 0;
   var _vpnStatus = 'off';
 
   VPNControl? get _vpn {
@@ -43,6 +47,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   DiagnosticsControl? get _diagnostics =>
       _vpn is DiagnosticsControl ? _vpn as DiagnosticsControl : null;
+
+  RoutingControl? get _routing {
+    final core = widget.core;
+    return core is RoutingControl ? core as RoutingControl : null;
+  }
 
   void _openProbe(String scope, String id) {
     final core = _diagnostics;
@@ -99,9 +108,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final core = widget.core;
     if (core is! MaintenanceControl) return;
     _updatingAutomatically = true;
+    final revision = _stateRevision;
     try {
       final state = await (core as MaintenanceControl).refreshDue();
-      if (mounted && !_importing && !_validating) {
+      if (mounted &&
+          !_importing &&
+          !_validating &&
+          revision == _stateRevision) {
         setState(() => _restore(state));
       }
     } on PlatformException {
@@ -158,7 +171,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   void _restore(ClientState state) {
+    _stateRevision++;
     _subscriptions = state.subscriptions;
+    _routingProfiles = state.routingProfiles;
+    _activeRoutingProfile = state.activeRoutingProfile;
     final settings = state.settings;
     _rules = settings.rules;
     _via = settings.via;
@@ -256,7 +272,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       () => widget.core.refreshSubscription(id),
       refresh: true,
     );
-    if (mounted) _notify(error ?? 'Подписка обновлена.');
+    if (mounted) {
+      final failed =
+          _subscriptions
+              .where((item) => item.id == id)
+              .firstOrNull
+              ?.refreshFailed ==
+          true;
+      _notify(
+        error ??
+            (failed
+                ? 'Подписку не удалось обновить. Сохранён предыдущий список.'
+                : 'Подписка обновлена.'),
+      );
+    }
   }
 
   Future<String?> _saveSettings({
@@ -283,7 +312,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       if (mounted) {
         setState(
           () => _restore(
-            ClientState(subscriptions: _subscriptions, settings: next),
+            ClientState(
+              subscriptions: _subscriptions,
+              settings: next,
+              routingProfiles: _routingProfiles,
+              activeRoutingProfile: _activeRoutingProfile,
+            ),
           ),
         );
         if (_vpnStatus == 'on') {
@@ -304,6 +338,66 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => _validating = false);
     }
+  }
+
+  Future<ClientState> _changeRuleProfile(
+    String operation,
+    String id,
+    String name,
+  ) async {
+    final core = _routing;
+    if (core == null || _validating || _importing) {
+      throw PlatformException(
+        code: 'busy',
+        message: 'Дождитесь окончания сохранения.',
+      );
+    }
+    setState(() => _validating = true);
+    try {
+      final state = await core.changeRoutingProfile(
+        operation,
+        id: id,
+        name: name,
+      );
+      if (mounted) setState(() => _restore(state));
+      return state;
+    } finally {
+      if (mounted) setState(() => _validating = false);
+    }
+  }
+
+  void _openRuleProfiles() {
+    final profiles = _routingProfiles.isEmpty
+        ? [RoutingProfile('default', 'Основной', _rules.length)]
+        : [
+            for (final profile in _routingProfiles)
+              profile.id == _activeRoutingProfile
+                  ? RoutingProfile(profile.id, profile.name, _rules.length)
+                  : profile,
+          ];
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RoutingProfilesPage(
+          profiles: profiles,
+          active: _activeRoutingProfile,
+          onChange: _changeRuleProfile,
+        ),
+      ),
+    );
+  }
+
+  void _openRouteCheck() {
+    final core = _routing;
+    if (core == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RouteCheckPage(
+          core: core,
+          serverName: _serverName,
+          pickApp: widget.core.supportsAndroidRules ? _pickApp : null,
+        ),
+      ),
+    );
   }
 
   Future<void> _editRule([int? index, String? destination]) async {
@@ -575,6 +669,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       ? null
                       : () => _refresh(subscription.id),
                 ),
+              SubscriptionDetails(subscription: subscription),
               for (final server in subscription.servers)
                 ListTile(
                   leading: _ProfileIcon(balance: server.balance),
@@ -614,6 +709,28 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   List<Widget> _rulesPage(BuildContext context) {
     return [
       const _PageTitle('Маршрутизация'),
+      if (_routing != null) ...[
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.layers_outlined),
+            title: const Text('Профили правил'),
+            subtitle: Text(
+              _routingProfiles
+                      .where((profile) => profile.id == _activeRoutingProfile)
+                      .firstOrNull
+                      ?.name ??
+                  'Основной',
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: _validating || _importing ? null : _openRuleProfiles,
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: _validating || _importing ? null : _openRouteCheck,
+          icon: const Icon(Icons.search),
+          label: const Text('Проверить адрес'),
+        ),
+      ],
       FilledButton.icon(
         onPressed: _validating || _importing ? null : () => _editRule(),
         icon: const Icon(Icons.add_rounded),

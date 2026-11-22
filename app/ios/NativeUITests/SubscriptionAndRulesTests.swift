@@ -1,10 +1,10 @@
 import XCTest
 
 final class SubscriptionAndRulesTests: XCTestCase {
-  private func launch() -> XCUIApplication {
+  private func launch(screen: String = "home") -> XCUIApplication {
     continueAfterFailure = false
     let app = XCUIApplication()
-    app.launchEnvironment["HYROUTE_LAYOUT_PREVIEW"] = "home"
+    app.launchEnvironment["HYROUTE_LAYOUT_PREVIEW"] = screen
     app.launchEnvironment["HYROUTE_UI_TEST"] = "1"
     app.launch()
     return app
@@ -71,5 +71,40 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.navigationBars["geosite.dat"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.textFields["geo-source-address"].exists)
     XCTAssertTrue(app.buttons["Вернуть runetfreedom"].exists)
+  }
+
+  func testChecksSavedRouteAndShowsSubscriptionTraffic() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-subscriptions"])
+    tap(app.buttons["subscription-demo"])
+    XCTAssertTrue(app.staticTexts["subscription-traffic"].waitForExistence(timeout: 10))
+    tap(app.buttons["tab-rules"])
+    tap(app.buttons["route-check"])
+    let address = app.textFields["route-check-address"]
+    tap(address)
+    address.typeText("example.org")
+    tap(app.buttons["route-check-submit"])
+    let rule = app.staticTexts["route-check-rule"]
+    XCTAssertTrue(rule.waitForExistence(timeout: 10))
+    XCTAssertEqual(rule.label, "Сайт без VPN")
+  }
+
+  func testCopiesAndSwitchesNamedRoutingProfiles() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-rules"])
+    tap(app.buttons["rule-sets"])
+    tap(app.buttons["routing-profile-copy"])
+    let name = app.textFields["routing-profile-name"]
+    tap(name)
+    name.typeText("Work")
+    tap(app.buttons["Сохранить"])
+    let copied = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                                  "routing-profile-", "Work")).firstMatch
+    XCTAssertTrue(copied.waitForExistence(timeout: 10))
+    XCTAssertTrue(copied.isSelected)
+    let original = app.buttons["routing-profile-default"]
+    tap(original)
+    let selection = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: original)
+    XCTAssertEqual(XCTWaiter.wait(for: [selection], timeout: 10), .completed)
   }
 }

@@ -3,10 +3,29 @@ import NetworkExtension
 import SwiftUI
 
 private enum CoreError: Error { case invalidResult, missingTunnelExtension }
+private struct ClientMessage: LocalizedError {
+  let text: String
+  var errorDescription: String? { text }
+}
 
 actor NativeCore {
   static let shared = NativeCore()
   private let store = ClientStore()
+  #if targetEnvironment(simulator)
+  private var routingFixture: String?
+
+  func loadRoutingFixture() throws -> ClientState {
+    let fixture = """
+    {"subscriptions":[{"id":"demo","url":"https://example.test/sub","refreshedAt":1795400000,
+      "snapshot":{"title":"Тестовая подписка","userInfo":"upload=1073741824; download=2147483648; total=10737418240; expire=1893456000",
+      "servers":[{"id":"demo-node","name":"Тестовый сервер","host":"192.0.2.2","ports":"443","auth":"fixture"}]}}],
+      "settings":{"selected":"demo-node","routing":{"defaultAction":"tunnel","rules":[
+        {"name":"Сайт без VPN","domains":["example.org"],"action":"direct"}]}}}
+    """
+    routingFixture = fixture
+    return try view(fixture)
+  }
+  #endif
 
   func load() throws -> ClientState {
     let folder = try store.prepareDirectory()
@@ -68,6 +87,37 @@ actor NativeCore {
     return try persist(HyRouteSaveSettings(try store.read(), raw))
   }
 
+  func changeRoutingProfile(_ operation: String, id: String, name: String) throws -> ClientState {
+    let before = try routingState()
+    var issue: NSString?
+    guard let updated = HyRouteChangeRoutingProfile(before, operation, id, name, &issue) else {
+      throw ClientMessage(text: (issue as String?) ?? "Не удалось изменить профиль правил.")
+    }
+    if updated == before { return try view(before) }
+    #if targetEnvironment(simulator)
+    if routingFixture != nil {
+      routingFixture = updated
+      return try view(updated)
+    }
+    #endif
+    return try persist(updated)
+  }
+
+  func checkRoute(_ address: String, ip: String, transport: String) throws -> CheckedRoute {
+    var issue: NSString?
+    guard let result = HyRouteCheckClientRoute(try routingState(), address, ip, transport, &issue) else {
+      throw ClientMessage(text: (issue as String?) ?? "Не удалось проверить маршрут.")
+    }
+    return try JSONDecoder().decode(CheckedRoute.self, from: Data(result.utf8))
+  }
+
+  private func routingState() throws -> String {
+    #if targetEnvironment(simulator)
+    if let routingFixture { return routingFixture }
+    #endif
+    return try store.read()
+  }
+
   private func persist(_ raw: String?) throws -> ClientState {
     guard let raw else { throw CoreError.invalidResult }
     let state = try view(raw)
@@ -91,6 +141,7 @@ final class Client: ObservableObject {
   private var stoppingVPN = false
   private var mayRetryExtension = false
   private var updatingAutomatically = false
+  private var stateRevision = 0
   @Published private(set) var state = ClientState()
   @Published private(set) var ready = false
   @Published private(set) var busy = false
@@ -279,6 +330,13 @@ final class Client: ObservableObject {
   }
 
 #if targetEnvironment(simulator)
+  func loadRoutingFixture() async -> Bool {
+    guard let fixture = try? await core.loadRoutingFixture() else { return false }
+    state = fixture
+    ready = true
+    return true
+  }
+
   func loadLayoutPreview() -> Bool {
     let fixture = """
     {
@@ -342,8 +400,12 @@ final class Client: ObservableObject {
   }
 
   func refresh(_ id: String) async {
-    _ = await change("Не удалось обновить подписку. Сохранён предыдущий список.") {
+    let failure = "Не удалось обновить подписку. Сохранён предыдущий список."
+    let updated = await change(failure) {
       try await self.core.refresh(id)
+    }
+    if updated && state.subscriptions.first(where: { $0.id == id })?.refreshFailed == true {
+      error = failure
     }
   }
 
@@ -358,6 +420,18 @@ final class Client: ObservableObject {
     next.routing = routing
     next.selected = state.selected?.id
     return await save(next, reportError: reportError)
+  }
+
+  func changeRoutingProfile(_ operation: String, id: String = "", name: String = "") async throws {
+    guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
+    busy = true
+    defer { busy = false }
+    state = try await core.changeRoutingProfile(operation, id: id, name: name)
+    stateRevision += 1
+  }
+
+  func checkRoute(_ address: String, ip: String, transport: String) async throws -> CheckedRoute {
+    try await core.checkRoute(address, ip: ip, transport: transport)
   }
 
   func geoTags(update: Bool) async throws -> [String] {
@@ -393,10 +467,14 @@ final class Client: ObservableObject {
   }
 
   func refreshAutomatically() async {
-    guard ready, !updatingAutomatically else { return }
+    guard ready, !updatingAutomatically, !busy else { return }
     updatingAutomatically = true
     defer { updatingAutomatically = false }
-    if let snapshot = try? await core.autoRefresh() { state = snapshot }
+    let revision = stateRevision
+    if let snapshot = try? await core.autoRefresh(), !busy, stateRevision == revision {
+      state = snapshot
+      stateRevision += 1
+    }
     if !Task.isCancelled {
       _ = await Task.detached(priority: .utility) { HyRouteAutoUpdateGeo() }.value
     }
@@ -414,6 +492,7 @@ final class Client: ObservableObject {
     defer { busy = false }
     do {
       state = try await operation()
+      stateRevision += 1
       return true
     } catch {
       if reportError { self.error = failure }

@@ -69,7 +69,7 @@ public class MainActivity extends FlutterActivity {
                     synchronized (ClientStore.LOCK) {
                         String state = store.read();
                         String updated = call.method.equals("refreshSubscription")
-                                ? Mobile.refreshClientSubscription(state, call.argument("id"))
+                                ? Mobile.attemptClientSubscriptionRefresh(state, call.argument("id"))
                                 : Mobile.addClientSubscription(state, call.argument("input"),
                                     Boolean.TRUE.equals(call.argument("fromUrl")));
                         String view = Mobile.clientStateView(updated);
@@ -84,6 +84,33 @@ public class MainActivity extends FlutterActivity {
                     }
                     result.success(null);
                     break;
+                case "changeRoutingProfile":
+                    synchronized (ClientStore.LOCK) {
+                        String previous = store.read();
+                        try {
+                            String updated = Mobile.changeRoutingProfile(previous, call.argument("operation"),
+                                    call.argument("id"), call.argument("name"));
+                            String view = Mobile.clientStateView(updated);
+                            if (!previous.equals(updated)) store.write(updated);
+                            result.success(view);
+                        } catch (IOException | GeneralSecurityException failure) {
+                            throw failure;
+                        } catch (Exception failure) {
+                            result.error("routing-profile", failure.getMessage(), null);
+                        }
+                    }
+                    break;
+                case "checkRoute": {
+                    String state = store.read();
+                    try {
+                        result.success(Mobile.checkClientRoute(state, call.argument("address"),
+                                call.argument("ip"), call.argument("protocol"),
+                                call.argument("package"), true));
+                    } catch (Exception failure) {
+                        result.error("route", failure.getMessage(), null);
+                    }
+                    break;
+                }
                 case "geoTags":
                     result.success(Mobile.geoTags());
                     break;

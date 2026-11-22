@@ -4,6 +4,8 @@ NS_ASSUME_NONNULL_BEGIN
 NSString * _Nullable HyRouteStateView(NSString *state);
 NSString * _Nullable HyRouteAddSubscription(NSString *state, NSString *input, BOOL fromURL);
 NSString * _Nullable HyRouteRefreshSubscription(NSString *state, NSString *subscriptionID);
+NSString * _Nullable HyRouteChangeRoutingProfile(NSString *state, NSString *operation, NSString *profileID, NSString *name, NSString * _Nullable * _Nonnull issue);
+NSString * _Nullable HyRouteCheckClientRoute(NSString *state, NSString *address, NSString *ip, NSString *transport, NSString * _Nullable * _Nonnull issue);
 NSString * _Nullable HyRouteAutoRefreshSubscriptions(NSString *state);
 NSObject *HyRouteNewMaintenance(void);
 void HyRouteCancelMaintenance(NSObject *maintenance);

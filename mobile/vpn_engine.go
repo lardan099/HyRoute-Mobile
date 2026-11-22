@@ -253,23 +253,7 @@ func (r *vpnFlowRouter) route(ctx routing.Context) string {
 			return blockTag
 		}
 	}
-	var result rules.Result
-	if domain := ctx.GetTargetDomain(); domain != "" {
-		result = plan.router.rules.EvaluateDomain(subject, domain, rules.SrcNone)
-	} else {
-		result = plan.router.rules.EvaluateNoDomain(subject)
-	}
-	if subject.Dst.Port() == 53 {
-		// The configured DNS uses the active VPN. A saved rule can block DNS,
-		// but a direct default cannot make the resolver leave the tunnel.
-		if result.Action == rules.Block && !result.NeedsDomain {
-			return blockTag
-		}
-		if subject.Dst.Addr().String() != vpnDNS {
-			return blockTag
-		}
-		return plan.tags[plan.selected]
-	}
+	result := plan.evaluateFlow(subject, ctx.GetTargetDomain())
 	if result.NeedsDomain || result.Action == rules.Block {
 		return blockTag
 	}
@@ -280,4 +264,25 @@ func (r *vpnFlowRouter) route(ctx routing.Context) string {
 		return tag
 	}
 	return blockTag
+}
+
+func (plan *VPNPlan) evaluateFlow(subject rules.Subject, domain string) rules.Result {
+	var result rules.Result
+	if domain != "" {
+		result = plan.router.rules.EvaluateDomain(subject, domain, rules.SrcNone)
+	} else {
+		result = plan.router.rules.EvaluateNoDomain(subject)
+	}
+	if subject.Dst.Port() == 53 {
+		// The configured DNS uses the active VPN. A saved rule can block DNS,
+		// but a direct default cannot make the resolver leave the tunnel.
+		if result.Action == rules.Block && !result.NeedsDomain {
+			return result
+		}
+		if subject.Dst.Addr().String() != vpnDNS {
+			return rules.Result{Action: rules.Block, Rule: "Системный DNS"}
+		}
+		return rules.Result{Action: rules.Tunnel, Profile: plan.selected, Rule: "Системный DNS"}
+	}
+	return result
 }
