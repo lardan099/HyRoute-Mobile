@@ -381,9 +381,17 @@ private struct ChainEditor: View {
                   chainEndpoint("Выход", value: client.state.profileTitle(brokenExit), valid: available.contains(brokenExit))
                   chainEndpoint("Через", value: client.state.profileTitle(brokenEntry), valid: available.contains(brokenEntry))
                   if available.contains(brokenExit), profiles.count >= 2 {
-                    Button("Заменить промежуточный профиль") { selectExit(brokenExit) }
-                      .buttonStyle(.borderless)
-                      .frame(minHeight: 44, alignment: .leading)
+                    Menu("Заменить промежуточный профиль") {
+                      ForEach(profiles.filter { $0.id != brokenExit }) { profile in
+                        Button(profile.title) {
+                          exit = brokenExit
+                          entry = profile.id
+                        }
+                      }
+                    }
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: 44, alignment: .leading)
+                    .accessibilityIdentifier("replace-broken-chain-\(brokenExit)")
                   }
                   Button("Удалить связь", role: .destructive) {
                     Task { await removeLink(brokenExit) }
@@ -419,7 +427,7 @@ private struct ChainEditor: View {
       }
       .disabled(client.busy)
       .hyList()
-      .navigationTitle("Цепочка профилей")
+      .navigationTitle("Цепочки")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }

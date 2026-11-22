@@ -49,7 +49,14 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(app.segmentedControls.buttons["Настройки"].firstMatch)
     XCTAssertFalse(app.buttons["rule-row-0"].exists)
     tap(app.buttons["rules-chains"])
+    XCTAssertTrue(app.navigationBars["Цепочки"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["Недоступные связи"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["remove-broken-chain-auto"].isHittable)
+    let save = app.buttons["Сохранить"]
+    XCTAssertFalse(save.isEnabled)
+    tap(app.buttons["replace-broken-chain-auto"])
+    tap(app.buttons["🇫🇮 Хельсинки · Северный узел | Hysteria 2"].firstMatch)
+    let canSave = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
+    XCTAssertEqual(XCTWaiter.wait(for: [canSave], timeout: 10), .completed)
   }
 }
