@@ -73,7 +73,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          gomobile bind -trimpath -androidapi 24 -target "$MOBILE_TARGET" -o "dist/$MOBILE_OUTPUT" ./mobile
+          link_flags=()
+          if [[ "$MOBILE_TARGET" == android/* ]]; then
+            # Match Xray's Android release flags for its anet dependency.
+            link_flags+=(-ldflags=-checklinkname=0)
+          fi
+          gomobile bind -trimpath "${link_flags[@]}" -androidapi 24 -target "$MOBILE_TARGET" -o "dist/$MOBILE_OUTPUT" ./mobile
       - name: Build Android routing adapter
         if: matrix.platform == 'Android'
         shell: bash
