@@ -645,7 +645,7 @@ private struct GeoSourceEditor: View {
       _ = try await client.geoTags(update: true)
       dismiss()
     } catch {
-      error = "Источник сохранён. Скачать базы пока не удалось."
+      self.error = "Источник сохранён. Скачать базы пока не удалось."
     }
   }
 }

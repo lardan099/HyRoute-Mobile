@@ -17,7 +17,7 @@ enum VPNStorage {
     guard let directory = sharedGeodata else { return legacy }
     let files = FileManager.default
     try files.createDirectory(at: directory, withIntermediateDirectories: true)
-    for name in ["geoip.dat", "geosite.dat", "geo.json"] {
+    for name in ["geoip.dat", "geosite.dat", "geo.json", "mobile-geo.json"] {
       let source = legacy.appendingPathComponent(name)
       let destination = directory.appendingPathComponent(name)
       if files.fileExists(atPath: source.path) && !files.fileExists(atPath: destination.path) {
