@@ -87,8 +87,10 @@ public class MainActivity extends FlutterActivity {
                     break;
                 case "stopVpn":
                     runOnUiThread(() -> {
-                        HyRouteVpnService.stopping();
-                        stopService(new Intent(this, HyRouteVpnService.class));
+                        String status = HyRouteVpnService.status();
+                        if (status.equals("on") || status.equals("starting")) {
+                            startService(new Intent(this, HyRouteVpnService.class).setAction(HyRouteVpnService.STOP));
+                        }
                         result.success(null);
                     });
                     break;

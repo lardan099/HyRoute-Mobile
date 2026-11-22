@@ -9,6 +9,8 @@ import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.VpnService;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.system.OsConstants;
 
@@ -29,7 +31,7 @@ import mobile.VPNSession;
 
 public final class HyRouteVpnService extends VpnService {
     private static final String CHANNEL = "hyroute-vpn";
-    private static final String STOP = "io.hyroute.vpn.STOP";
+    static final String STOP = "io.hyroute.vpn.STOP";
     private static final int NOTIFICATION = 601;
     private static final AtomicReference<String> STATUS = new AtomicReference<>("off");
 
@@ -50,15 +52,14 @@ public final class HyRouteVpnService extends VpnService {
     static void permissionDenied() { STATUS.compareAndSet("permission", "off"); }
     static void failed() { STATUS.set("error"); }
 
-    static void stopping() {
-        STATUS.getAndUpdate(value -> value.equals("on") || value.equals("starting") ? "stopping" : "off");
+    private static void stopping() {
+        STATUS.getAndUpdate(value -> value.equals("on") || value.equals("starting") ? "stopping" : value);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || STOP.equals(intent.getAction())) {
-            stopping();
-            stopSelf();
+            requestStop();
             return START_NOT_STICKY;
         }
         if (started) return START_NOT_STICKY;
@@ -126,9 +127,19 @@ public final class HyRouteVpnService extends VpnService {
     }
 
     @Override public void onRevoke() {
+        new Handler(Looper.getMainLooper()).post(this::requestStop);
+    }
+
+    private void requestStop() {
+        if (closed) return;
+        closed = true;
         stopping();
-        stopSelf();
-        super.onRevoke();
+        // Android keeps this service bound until the TUN descriptor closes.
+        worker.execute(() -> {
+            closeTunnel();
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            stopSelf();
+        });
     }
 
     @Override public void onDestroy() {

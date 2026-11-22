@@ -7,8 +7,13 @@
 - Локальные правила по домену, IP, порту и протоколу, включая цепочки VPN-профилей.
 - Android-адаптер split tunneling и назначения VPN-профиля по пакету приложения.
 
-Установочные сборки поддерживают импорт и сохранение профилей и настройку правил.
-Подключение VPN-туннелей ещё в разработке.
+Клиенты запускают системный VPN через `VpnService` на Android и Packet Tunnel
+на iOS. Встроенное ядро поддерживает VLESS и Hysteria 2, включая профили
+автовыбора VLESS. Клиент применяет правила из своего редактора. После правки
+профиля или правил переподключите VPN.
+
+Сетевое ядро включает [Xray-core v26.10.31](https://github.com/XTLS/Xray-core/tree/a4a3dff5b20c)
+под [MPL 2.0](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c/LICENSE).
 
 ## Проверка
 
@@ -42,5 +47,7 @@ Keychain и сохраняет данные при обновлении с то�
 Для тестовой сборки включите `build_apps` в workflow **Mobile Go bindings**.
 Для сборки одной платформы укажите её в поле `platform`. Workflow выдаёт
 APK для Android и IPA для iPhone с версией в имени, например
-`HyRoute-Android-debug-0.2.1.apk` и `HyRoute-iOS-unsigned-0.2.1.ipa`.
-Для установки IPA требуется подпись Apple.
+`HyRoute-Android-debug-0.3.0.apk` и `HyRoute-iOS-unsigned-0.3.0.ipa`.
+Для запуска VPN на iPhone нужны профили подписи Apple с Network Extension
+для HyRoute и HyRouteTunnel. App Group `group.io.hyroute.mobile` позволяет
+приложению и расширению использовать общие базы правил.
