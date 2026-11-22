@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 )
 
@@ -149,11 +150,21 @@ func SaveClientSettings(raw, settingsJSON string, android bool) (string, error) 
 		return "", err
 	}
 	if _, err := newRouter(string(settings.Routing), settings.Selected, android); err != nil {
-		return "", err
+		if android || !errors.Is(err, errVPNGeodata) || !sameRuleConfig(state.Settings.Routing, settings.Routing) {
+			return "", err
+		}
 	}
 	state.Settings = settings
 	data, err := json.Marshal(state)
 	return string(data), err
+}
+
+// A user can repair a profile chain or selection while an existing GeoIP or
+// GeoSite category is unavailable. Starting the VPN still validates all rules.
+func sameRuleConfig(previous, next json.RawMessage) bool {
+	var oldConfig, newConfig routingConfig
+	return json.Unmarshal(previous, &oldConfig) == nil && json.Unmarshal(next, &newConfig) == nil &&
+		reflect.DeepEqual(oldConfig.Config, newConfig.Config)
 }
 
 // ClientStateView strips subscription links and connection credentials from the

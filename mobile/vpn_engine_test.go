@@ -81,6 +81,29 @@ func TestIOSVPNPlanUsesDisplayedProfileAfterSelectedServerDisappears(t *testing.
 	check("", "profile")
 }
 
+func TestIOSChainRepairWithExistingUnavailableGeoRules(t *testing.T) {
+	ConfigureGeo(t.TempDir())
+	state := `{"subscriptions":[{"snapshot":{"servers":[{"id":"active","host":"127.0.0.1","ports":"443","auth":"fixture"}]} }],
+		"settings":{"selected":"active","routing":{"defaultAction":"tunnel",
+		"rules":[{"action":"direct","domains":["geosite:youtube"]}],"viaProfiles":{"active":"gone"}}}}`
+	settings := `{"selected":"active","routing":{"defaultAction":"tunnel",
+		"rules":[{"action":"direct","domains":["geosite:youtube"]}]}}`
+	updated, err := SaveClientSettings(state, settings, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(updated, "gone") {
+		t.Fatal("the unavailable link survived explicit removal")
+	}
+	if issue := InspectIOSVPNPlan(updated).Issue(); issue != "geo" {
+		t.Fatalf("starting the VPN must still require geodata, issue = %q", issue)
+	}
+	changedRules := strings.Replace(settings, "geosite:youtube", "geosite:telegram", 1)
+	if _, err := SaveClientSettings(state, changedRules, false); err == nil {
+		t.Fatal("a changed rule referencing missing data must still be rejected")
+	}
+}
+
 func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {
 	const auth = "local-hysteria-test"
 	response := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

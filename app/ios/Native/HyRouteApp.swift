@@ -380,7 +380,6 @@ private struct SubscriptionPage: View {
               .disabled(client.busy)
             }
           }
-          HyHeading(text: "Серверы")
           LazyVStack(spacing: 0) {
             ForEach(item.servers) { profile in
               HStack(spacing: 6) {

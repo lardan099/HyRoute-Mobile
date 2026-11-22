@@ -99,6 +99,13 @@ struct Routing: Codable {
 
   init() {}
 
+  func unavailableChainExits(available: Set<String>) -> [String] {
+    viaProfiles.keys.filter { exit in
+      guard let entry = viaProfiles[exit] else { return false }
+      return !available.contains(exit) || !available.contains(entry)
+    }.sorted()
+  }
+
   init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     defaultAction = try values.decodeIfPresent(RouteAction.self, forKey: .defaultAction) ?? .tunnel
@@ -136,5 +143,11 @@ struct ClientState: Decodable {
   var selected: VPNProfile? {
     let available = profiles
     return available.first { $0.id == settings.selected } ?? available.first
+  }
+
+  func profileTitle(_ id: String) -> String {
+    let profile = subscriptions.lazy.flatMap(\.servers).first { $0.id == id }
+    guard let profile else { return "Удалённый профиль" }
+    return profile.missing == true ? "\(profile.title) · недоступен" : profile.title
   }
 }

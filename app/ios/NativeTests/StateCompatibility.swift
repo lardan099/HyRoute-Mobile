@@ -27,6 +27,12 @@ struct StateCompatibility {
     precondition(routing?["viaProfiles"] as? [String: String] == ["auto": "server"])
     precondition(rules?.first?["protocol"] as? String == "tcp")
     precondition(rules?.first?["profile"] as? String == "auto")
+    precondition(state.settings.routing.unavailableChainExits(available: ["auto", "server"]).isEmpty)
+    var broken = state.settings.routing
+    broken.viaProfiles["old"] = "auto"
+    precondition(broken.unavailableChainExits(available: ["auto"]) == ["auto", "old"])
+    precondition(state.profileTitle("server") == "Netherlands")
+    precondition(state.profileTitle("old") == "Удалённый профиль")
     let blank = try JSONDecoder().decode(ClientState.self, from: Data(#"{"subscriptions":[],"settings":{}}"#.utf8))
     precondition(blank.settings.routing.defaultAction == .tunnel)
     precondition(blank.selected == nil)

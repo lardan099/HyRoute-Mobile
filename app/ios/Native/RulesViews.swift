@@ -25,6 +25,7 @@ struct RulesPage: View {
                 .lineLimit(2)
             }
             .buttonStyle(.plain)
+            .listRowBackground(HyStyle.surface)
           }
           .onDelete { indices in mutate { $0.rules.remove(atOffsets: indices) } }
           .onMove { indices, offset in mutate { $0.rules.move(fromOffsets: indices, toOffset: offset) } }
@@ -41,10 +42,11 @@ struct RulesPage: View {
         )) {
           ForEach(RouteAction.allCases) { Text($0.label).tag($0) }
         }
+        .listRowBackground(HyStyle.surface)
         Button { editingChain = true } label: {
           Label {
             VStack(alignment: .leading, spacing: 4) {
-              Text("Профиль через профиль")
+              Text("Цепочки профилей")
               if routing.viaProfiles.isEmpty {
                 Text(client.state.profiles.count < 2 ? "Нужно два VPN-профиля" : "Цепочки не настроены")
                   .font(.subheadline).foregroundStyle(.secondary)
@@ -62,12 +64,14 @@ struct RulesPage: View {
           }
         }
         .buttonStyle(.plain)
-        .disabled(client.state.profiles.count < 2)
+        .listRowBackground(HyStyle.surface)
+        .disabled(client.state.profiles.count < 2 && routing.viaProfiles.isEmpty)
         NavigationLink {
           GeoCatalog(client: client)
         } label: {
           HyRow(title: "Базы правил", symbol: "globe.europe.africa", detail: "GeoSite и GeoIP", disclosure: false)
         }
+        .listRowBackground(HyStyle.surface)
       }
     }
     .disabled(client.busy)
@@ -82,7 +86,7 @@ struct RulesPage: View {
   }
 
   private func profileName(_ id: String) -> String {
-    client.state.profiles.first { $0.id == id }?.title ?? "Профиль недоступен"
+    client.state.profileTitle(id)
   }
 
   private func mutate(_ edit: (inout Routing) -> Void) {
@@ -277,18 +281,52 @@ private struct ChainEditor: View {
   @State private var exit = ""
   @State private var entry = ""
 
+  private var profiles: [VPNProfile] { client.state.profiles }
+  private var available: Set<String> { Set(profiles.map(\.id)) }
+  private var routing: Routing { client.state.settings.routing }
+  private var unavailable: [String] { routing.unavailableChainExits(available: available) }
+
   var body: some View {
     NavigationStack {
       Form {
-        Picker("Выходной профиль", selection: $exit) {
-          ForEach(client.state.profiles) { Text($0.title).tag($0.id) }
+        if !unavailable.isEmpty {
+          Section("Недоступные связи") {
+            ForEach(unavailable, id: \.self) { brokenExit in
+              if let brokenEntry = routing.viaProfiles[brokenExit] {
+                VStack(alignment: .leading, spacing: 8) {
+                  Text(client.state.profileTitle(brokenExit)).font(.body.weight(.semibold))
+                  Text("Через \(client.state.profileTitle(brokenEntry))")
+                    .font(.subheadline).foregroundStyle(HyStyle.muted)
+                  if available.contains(brokenExit), profiles.count >= 2 {
+                    Button("Заменить промежуточный профиль") { selectExit(brokenExit) }
+                      .buttonStyle(.borderless)
+                  }
+                  Button("Удалить связь", role: .destructive) {
+                    Task { await removeLink(brokenExit) }
+                  }
+                  .buttonStyle(.borderless)
+                }
+                .padding(.vertical, 4)
+              }
+            }
+          }
         }
-        .onChange(of: exit) { id in entry = client.state.settings.routing.viaProfiles[id] ?? "" }
-        Picker("Через профиль", selection: $entry) {
-          Text("Без промежуточного профиля").tag("")
-          ForEach(client.state.profiles.filter { $0.id != exit }) { Text($0.title).tag($0.id) }
+        if !profiles.isEmpty {
+          Section("Настроить связь") {
+            Picker("Выходной профиль", selection: Binding(get: { exit }, set: selectExit)) {
+              ForEach(profiles) { Text($0.title).tag($0.id) }
+            }
+            Picker("Через профиль", selection: $entry) {
+              Text("Без промежуточного профиля").tag("")
+              if !entry.isEmpty && !available.contains(entry) {
+                Text(client.state.profileTitle(entry)).tag(entry)
+              }
+              ForEach(profiles.filter { $0.id != exit }) { Text($0.title).tag($0.id) }
+            }
+          }
         }
       }
+      .disabled(client.busy)
       .hyList()
       .navigationTitle("Цепочка профилей")
       .navigationBarTitleDisplayMode(.inline)
@@ -296,18 +334,28 @@ private struct ChainEditor: View {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
         ToolbarItem(placement: .confirmationAction) {
           Button("Сохранить") {
-            var routing = client.state.settings.routing
-            routing.viaProfiles[exit] = entry.isEmpty ? nil : entry
-            Task { if await client.saveRouting(routing) { dismiss() } }
+            var next = routing
+            next.viaProfiles[exit] = entry.isEmpty ? nil : entry
+            Task { if await client.saveRouting(next) { dismiss() } }
           }
-          .disabled(exit.isEmpty || client.busy)
+          .disabled(!available.contains(exit) || (!entry.isEmpty && !available.contains(entry)) || client.busy)
         }
       }
     }
     .onAppear {
-      exit = client.state.selected?.id ?? client.state.profiles.first?.id ?? ""
-      entry = client.state.settings.routing.viaProfiles[exit] ?? ""
+      selectExit(client.state.selected?.id ?? profiles.first?.id ?? "")
     }
+  }
+
+  private func selectExit(_ id: String) {
+    exit = id
+    entry = routing.viaProfiles[id] ?? ""
+  }
+
+  private func removeLink(_ id: String) async {
+    var next = routing
+    next.viaProfiles.removeValue(forKey: id)
+    if await client.saveRouting(next), exit == id { entry = "" }
   }
 }
 

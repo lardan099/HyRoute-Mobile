@@ -53,7 +53,7 @@ enum TunnelStartError: Int, CustomNSError {
     case .noProfile: return "Выберите доступный профиль VPN на главном экране."
     case .rules: return "Не удалось применить локальные правила. Откройте «Правила» и проверьте условия."
     case .geodata: return "Расширение не нашло базу или категорию GeoSite/GeoIP, которую используют правила."
-    case .missingReference: return "Правило или цепочка использует профиль, которого больше нет в подписке."
+    case .missingReference: return "Правило или цепочка использует недоступный профиль. Откройте «Правила» и замените его или удалите связь."
     case .unsupportedProfile: return "Профиль содержит неподдерживаемые параметры соединения."
     case .preparation: return "Не удалось подготовить VPN. Проверьте доступность сервера и настройки профиля."
     case .networkSettings: return "iOS не смогла настроить интерфейс VPN."
