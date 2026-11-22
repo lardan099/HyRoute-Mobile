@@ -15,11 +15,18 @@ type XrayBalancer struct {
 	vless.Balance
 }
 
-// xrayBalancer recognizes one leastLoad TCP/UDP profile, optionally with
+// xrayBalancer recognizes one leastLoad or leastPing TCP/UDP profile, optionally with
 // a BitTorrent block. Keep its nodes together rather than exposing the
 // constituent outbounds as separate servers.
 func (r *Result) xrayBalancer(name string, raw json.RawMessage, outbounds []json.RawMessage) bool {
 	var cfg struct {
+		BurstObservatory struct {
+			PingConfig struct {
+				Interval string
+				Timeout  string
+				Sampling int
+			}
+		}
 		Routing struct {
 			Rules     []map[string]json.RawMessage
 			Balancers []struct {
@@ -45,8 +52,8 @@ func (r *Result) xrayBalancer(name string, raw json.RawMessage, outbounds []json
 		return fail(errors.New("поддерживается один балансировщик Xray"))
 	}
 	br := cfg.Routing.Balancers[0]
-	if br.Tag == "" || br.Strategy.Type != "leastLoad" || br.FallbackTag != "" || len(br.Selector) == 0 || slices.Contains(br.Selector, "") {
-		return fail(errors.New("поддерживается балансировщик leastLoad без fallbackTag"))
+	if br.Tag == "" || (br.Strategy.Type != "leastLoad" && br.Strategy.Type != "leastPing") || len(br.Selector) == 0 || slices.Contains(br.Selector, "") {
+		return fail(errors.New("поддерживаются балансировщики leastLoad и leastPing"))
 	}
 	var blockTag string
 	for i, rule := range cfg.Routing.Rules {
@@ -69,7 +76,11 @@ func (r *Result) xrayBalancer(name string, raw json.RawMessage, outbounds []json
 				continue
 			}
 		}
-		return fail(errors.New("поддерживается правило leastLoad для всего TCP и UDP"))
+		// Destination and DNS policy belongs to HyRoute. Only the last rule
+		// must identify this profile as a general-purpose TCP/UDP balancer.
+		if i == len(cfg.Routing.Rules)-1 {
+			return fail(errors.New("поддерживается правило балансировщика для всего TCP и UDP"))
+		}
 	}
 	if len(cfg.Routing.Rules) == 0 {
 		return fail(errors.New("балансировщик не используется в правилах Xray"))
@@ -77,6 +88,13 @@ func (r *Result) xrayBalancer(name string, raw json.RawMessage, outbounds []json
 
 	s := br.Strategy.Settings
 	profile := XrayBalancer{Name: firstNonEmpty(name, br.Tag), Balance: vless.Balance{Expected: s.Expected, Tolerance: s.Tolerance}}
+	if br.Strategy.Type == "leastPing" {
+		profile.Strategy = br.Strategy.Type
+	}
+	ping := cfg.BurstObservatory.PingConfig
+	profile.ProbeInterval, _ = time.ParseDuration(ping.Interval)
+	profile.ProbeTimeout, _ = time.ParseDuration(ping.Timeout)
+	profile.ProbeSamples = ping.Sampling
 	if s.MaxRTT != "" {
 		d, err := time.ParseDuration(s.MaxRTT)
 		if err != nil {
@@ -103,6 +121,12 @@ func (r *Result) xrayBalancer(name string, raw json.RawMessage, outbounds []json
 			return fail(err)
 		}
 		profile.Nodes = append(profile.Nodes, node)
+		if br.FallbackTag != "" && head.Tag == br.FallbackTag {
+			profile.FallbackNode = len(profile.Nodes)
+		}
+	}
+	if br.FallbackTag != "" && profile.FallbackNode == 0 {
+		return fail(errors.New("не найден запасной узел балансировщика"))
 	}
 	if blockTag != "" && !profile.BlockBitTorrent {
 		return fail(errors.New("не найден выход blackhole для правила BitTorrent"))

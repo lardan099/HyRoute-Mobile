@@ -42,10 +42,13 @@ public class MainActivity extends FlutterActivity {
                     Mobile.configureGeo(new File(getNoBackupFilesDir(), "geo").getPath());
                     result.success(Mobile.clientStateView(store.read()));
                     break;
-                case "importSubscription": {
-                    String input = call.argument("input");
-                    boolean fromUrl = Boolean.TRUE.equals(call.argument("fromUrl"));
-                    String updated = Mobile.addClientSubscription(store.read(), input, fromUrl);
+                case "importSubscription":
+                case "refreshSubscription": {
+                    String state = store.read();
+                    String updated = call.method.equals("refreshSubscription")
+                            ? Mobile.refreshClientSubscription(state, call.argument("id"))
+                            : Mobile.addClientSubscription(state, call.argument("input"),
+                                Boolean.TRUE.equals(call.argument("fromUrl")));
                     String view = Mobile.clientStateView(updated);
                     store.write(updated);
                     result.success(view);

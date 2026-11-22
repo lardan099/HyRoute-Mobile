@@ -54,17 +54,48 @@ func fetchSubscription(client *http.Client, rawURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if headers.Get("Profile-Web-Page-Url") != "" && subscription.HasVLESSLinks(body) {
+	primary, err := importSubscription(body, subscription.ReadPanelHeaders(headers).Clean())
+	if err != nil {
+		return "", err
+	}
+	if subscription.HasVLESSLinks(body) {
 		ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
 		defer cancel()
 		alternate := request.Clone(ctx)
 		alternate.Header.Set("User-Agent", "Happ/HyRoute")
 		alternate.Header.Set("Accept", "application/json, */*")
-		if altBody, altHeaders, err := requestSubscription(client, alternate); err == nil && subscription.HasXrayBalancer(altBody) {
-			body, headers = altBody, altHeaders
+		if altBody, _, err := requestSubscription(client, alternate); err == nil {
+			if alt, err := subscription.Parse(altBody); err == nil {
+				return appendPanelBalances(primary, alt.Profiles)
+			}
 		}
 	}
-	return importSubscription(body, subscription.ReadPanelHeaders(headers).Clean())
+	return primary, nil
+}
+
+func appendPanelBalances(primary string, alternate []hysteria.Profile) (string, error) {
+	var balancers []hysteria.Profile
+	byName := make(map[string]bool)
+	for _, profile := range alternate {
+		if profile.Balance != nil {
+			balancers = append(balancers, profile)
+			byName[profile.Name] = true
+		}
+	}
+	if len(balancers) == 0 {
+		return primary, nil
+	}
+	var base importedSubscription
+	if err := json.Unmarshal([]byte(primary), &base); err != nil {
+		return "", err
+	}
+	for _, profile := range base.Servers {
+		if !byName[profile.Name] {
+			balancers = append(balancers, profile)
+		}
+	}
+	base.Servers = balancers
+	return marshalSubscription(base)
 }
 
 func requestSubscription(client *http.Client, request *http.Request) ([]byte, http.Header, error) {

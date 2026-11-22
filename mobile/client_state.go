@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 type savedSubscription struct {
@@ -40,6 +41,14 @@ func AddClientSubscription(raw, input string, fromURL bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if fromURL {
+		input = strings.TrimSpace(input)
+		for index, item := range state.Subscriptions {
+			if item.URL == input {
+				return refreshClientSubscription(state, index)
+			}
+		}
+	}
 	imported, err := importInput(input, fromURL)
 	if err != nil {
 		return "", err
@@ -64,6 +73,66 @@ func AddClientSubscription(raw, input string, fromURL bool) (string, error) {
 				break
 			}
 		}
+	}
+	data, err := json.Marshal(state)
+	return string(data), err
+}
+
+// RefreshClientSubscription updates the saved URL snapshot while preserving
+// IDs referenced by local rules, chains and the selected profile.
+func RefreshClientSubscription(raw, subscriptionID string) (string, error) {
+	state, err := decodeClientState(raw)
+	if err != nil {
+		return "", err
+	}
+	for index, item := range state.Subscriptions {
+		if item.ID == subscriptionID && item.URL != "" {
+			return refreshClientSubscription(state, index)
+		}
+	}
+	return "", errors.New("ссылка подписки недоступна")
+}
+
+func refreshClientSubscription(state clientState, index int) (string, error) {
+	fresh, err := FetchSubscription(state.Subscriptions[index].URL)
+	if err != nil {
+		return "", err
+	}
+	return mergeClientSubscription(state, index, fresh)
+}
+
+func mergeClientSubscription(state clientState, index int, fresh string) (string, error) {
+	item := &state.Subscriptions[index]
+	var cfg routingConfig
+	if raw := state.Settings.Routing; len(raw) != 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return "", err
+		}
+	}
+	references := []string{state.Settings.Selected}
+	references = append(references, cfg.DefaultFallback...)
+	for _, rule := range cfg.Rules {
+		references = append(references, rule.Profile)
+		references = append(references, rule.Fallback...)
+	}
+	for exit, entry := range cfg.ViaProfiles {
+		references = append(references, exit, entry)
+	}
+	ids, err := json.Marshal(references)
+	if err != nil {
+		return "", err
+	}
+	previous, err := json.Marshal(item.Snapshot)
+	if err != nil {
+		return "", err
+	}
+	merged, err := MergeSubscription(string(previous), fresh, string(ids))
+	if err != nil {
+		return "", err
+	}
+	item.Snapshot = importedSubscription{}
+	if err := json.Unmarshal([]byte(merged), &item.Snapshot); err != nil {
+		return "", err
 	}
 	data, err := json.Marshal(state)
 	return string(data), err
@@ -99,7 +168,9 @@ func ClientStateView(raw string) (string, error) {
 		Settings      clientSettings        `json:"settings"`
 	}{Subscriptions: make([]subscriptionPreview, 0, len(state.Subscriptions)), Settings: state.Settings}
 	for _, item := range state.Subscriptions {
-		view.Subscriptions = append(view.Subscriptions, previewSubscription(item.ID, item.Snapshot))
+		preview := previewSubscription(item.ID, item.Snapshot)
+		preview.CanRefresh = item.URL != ""
+		view.Subscriptions = append(view.Subscriptions, preview)
 	}
 	data, err := json.Marshal(view)
 	return string(data), err

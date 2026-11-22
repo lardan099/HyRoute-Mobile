@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Balance is a selectable Xray leastLoad profile. Only the outbound
+// Balance is a selectable Xray leastLoad or leastPing profile. Only the outbound
 // parameters HyRoute supports are imported from a subscription.
 type Balance struct {
 	Nodes           []Node        `json:"nodes"`
@@ -17,6 +17,11 @@ type Balance struct {
 	Expected        int           `json:"expected,omitempty"`
 	Tolerance       float64       `json:"tolerance,omitempty"`
 	BlockBitTorrent bool          `json:"blockBitTorrent,omitempty"`
+	Strategy        string        `json:"strategy,omitempty"`
+	FallbackNode    int           `json:"fallbackNode,omitempty"` // one-based, or zero for none
+	ProbeInterval   time.Duration `json:"probeInterval,omitempty"`
+	ProbeTimeout    time.Duration `json:"probeTimeout,omitempty"`
+	ProbeSamples    int           `json:"probeSamples,omitempty"`
 }
 
 type Node struct {
@@ -54,6 +59,15 @@ func (b Balance) Validate() error {
 	if b.MaxRTT < 0 || b.MaxRTT > time.Minute || b.Expected < 0 || b.Expected > MaxBalanceNodes || b.Tolerance < 0 || b.Tolerance > 1 {
 		return errors.New("недопустимые параметры leastLoad")
 	}
+	if b.Strategy != "" && b.Strategy != "leastLoad" && b.Strategy != "leastPing" {
+		return errors.New("неподдерживаемая стратегия балансировщика")
+	}
+	if b.FallbackNode < 0 || b.FallbackNode > len(b.Nodes) {
+		return errors.New("некорректный запасной узел балансировщика")
+	}
+	if b.ProbeInterval < 0 || b.ProbeInterval > time.Hour || b.ProbeTimeout < 0 || b.ProbeTimeout > time.Minute || b.ProbeSamples < 0 || b.ProbeSamples > 10 {
+		return errors.New("недопустимые параметры проверки узлов балансировщика")
+	}
 	for _, n := range b.Nodes {
 		if n.Host == "" || n.Port < 1 || n.Port > 65535 {
 			return errors.New("у узла балансировщика нет корректного адреса или порта")
@@ -66,6 +80,10 @@ func (b Balance) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (b Balance) StrategyName() string {
+	return firstNonEmpty(b.Strategy, "leastLoad")
 }
 
 // BalanceConfig gives every resolved node its own Xray outbound. The
@@ -112,19 +130,35 @@ func BalanceConfig(b Balance, ips []netip.Addr, r Run) ([]byte, error) {
 	if b.MaxRTT != 0 {
 		strategy["maxRTT"] = b.MaxRTT.String()
 	}
+	balancer := map[string]any{
+		"tag": "balance", "selector": []string{prefix},
+		"strategy": map[string]any{"type": b.StrategyName()},
+	}
+	if b.StrategyName() == "leastLoad" {
+		balancer["strategy"].(map[string]any)["settings"] = strategy
+	}
+	if b.FallbackNode > 0 && ips[b.FallbackNode-1].IsValid() {
+		balancer["fallbackTag"] = prefix + strconv.Itoa(b.FallbackNode-1)
+	}
+	interval, timeout, samples := b.ProbeInterval, b.ProbeTimeout, b.ProbeSamples
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	if timeout == 0 {
+		timeout = 3 * time.Second
+	}
+	if samples == 0 {
+		samples = 1
+	}
 	cfg["outbounds"] = outbounds
 	cfg["routing"] = map[string]any{
-		"rules": rules,
-		"balancers": []any{map[string]any{
-			"tag": "balance", "selector": []string{prefix},
-			"strategy": map[string]any{"type": "leastLoad", "settings": strategy},
-		}},
+		"rules": rules, "balancers": []any{balancer},
 	}
 	cfg["burstObservatory"] = map[string]any{
 		"subjectSelector": []string{prefix},
 		"pingConfig": map[string]any{
-			"destination": "http://www.gstatic.com/generate_204",
-			"interval":    "30s", "timeout": "3s", "sampling": 1,
+			"destination": "https://connectivitycheck.gstatic.com/generate_204",
+			"interval":    interval.String(), "timeout": timeout.String(), "sampling": samples,
 		},
 	}
 	return json.MarshalIndent(cfg, "", "  ")

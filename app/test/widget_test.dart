@@ -23,10 +23,36 @@ class _TestCore implements ClientCore {
   Future<void> updateGeo() async {}
 
   @override
+  Future<ClientState> refreshSubscription(String id) async {
+    final old = state.subscriptions.single;
+    expect(id, old.id);
+    return state = ClientState(
+      settings: state.settings,
+      subscriptions: [
+        Subscription(
+          id: old.id,
+          title: old.title,
+          canRefresh: true,
+          servers: [
+            const Server(
+              id: 'auto',
+              name: '⚡️ Автовыбор',
+              protocol: 'VLESS · leastPing',
+              balance: true,
+            ),
+            ...old.servers,
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
   Future<ClientState> importSubscription(String input) async {
     this.input = input;
     const subscription = Subscription(
       id: 'test',
+      canRefresh: true,
       title: 'Тестовая подписка',
       servers: [
         Server(id: 'nl', name: 'Нидерланды', protocol: 'Hysteria 2'),
@@ -78,6 +104,21 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('refresh makes the auto profile selectable', (tester) async {
+    await _openApp(tester);
+    await _importTestSubscription(tester);
+    await _tap(tester, 'Тестовая подписка');
+    await _tap(tester, 'Обновить подписку');
+    expect(find.text('⚡️ Автовыбор'), findsOneWidget);
+    expect(find.text('VLESS · leastPing'), findsOneWidget);
+    await _tap(tester, '⚡️ Автовыбор');
+    await _tap(tester, 'Главная');
+    final selector = tester.widget<DropdownButton<String>>(
+      find.byType(DropdownButton<String>),
+    );
+    expect(selector.value, 'auto');
+  });
+
   testWidgets('adds a geosite category from the rule editor', (tester) async {
     final core = await _openApp(tester);
     await _tap(tester, 'Правила');

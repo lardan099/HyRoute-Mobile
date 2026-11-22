@@ -7,6 +7,7 @@ abstract interface class ClientCore {
   bool get supportsAndroidRules;
   Future<ClientState> loadState();
   Future<ClientState> importSubscription(String input);
+  Future<ClientState> refreshSubscription(String id);
   Future<void> saveSettings(ClientSettings settings);
   Future<List<String>> geoTags();
   Future<void> updateGeo();
@@ -34,6 +35,14 @@ class PlatformCore implements ClientCore {
     final result = await _channel.invokeMethod<String>('importSubscription', {
       'input': input,
       'fromUrl': uri?.scheme == 'https' && !input.contains(RegExp(r'\s')),
+    });
+    return ClientState.decode(result);
+  }
+
+  @override
+  Future<ClientState> refreshSubscription(String id) async {
+    final result = await _channel.invokeMethod<String>('refreshSubscription', {
+      'id': id,
     });
     return ClientState.decode(result);
   }
@@ -75,7 +84,7 @@ class Server {
       name: name.isNotEmpty ? name : host,
       host: host,
       protocol: switch ((json['protocol'], json['balance'])) {
-        ('vless', true) => 'VLESS · leastLoad',
+        ('vless', true) => 'VLESS · ${json['balanceStrategy'] ?? 'leastLoad'}',
         ('vless', _) => 'VLESS',
         _ => 'Hysteria 2',
       },
@@ -97,6 +106,7 @@ class Subscription {
     required this.id,
     required this.servers,
     this.title = '',
+    this.canRefresh = false,
   });
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
@@ -108,12 +118,14 @@ class Subscription {
       id: json['id'] as String,
       servers: servers,
       title: json['title'] as String? ?? '',
+      canRefresh: json['canRefresh'] == true,
     );
   }
 
   final List<Server> servers;
   final String id;
   final String title;
+  final bool canRefresh;
 }
 
 class ClientState {

@@ -19,6 +19,12 @@ NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings) {
     return error == nil ? updated : nil;
 }
 
+NSString * _Nullable HyRouteRefreshSubscription(NSString *state, NSString *subscriptionID) {
+    NSError *error = nil;
+    NSString *updated = MobileRefreshClientSubscription(state, subscriptionID, &error);
+    return error == nil ? updated : nil;
+}
+
 void HyRouteConfigureGeo(NSString *directory) {
     MobileConfigureGeo(directory);
 }

@@ -85,11 +85,20 @@ class _HomeState extends State<Home> {
       builder: (_) => const SubscriptionEditor(),
     );
     if (!mounted || input == null) return;
+    await _updateSubscriptions(() => widget.core.importSubscription(input));
+  }
+
+  Future<void> _updateSubscriptions(
+    Future<ClientState> Function() update, {
+    bool refresh = false,
+  }) async {
+    if (_importing || _validating) return;
     setState(() => _importing = true);
     try {
-      final state = await widget.core.importSubscription(input);
+      final state = await update();
       if (!mounted) return;
       setState(() => _restore(state));
+      if (refresh) _notify('Подписка обновлена.');
     } on MissingPluginException {
       if (mounted) _notify('Для импорта нужна сборка с мобильным ядром.');
     } on PlatformException catch (error) {
@@ -97,6 +106,8 @@ class _HomeState extends State<Home> {
         _notify(
           error.code == 'storage'
               ? 'Подписку не удалось сохранить. Проверьте хранилище устройства.'
+              : refresh
+              ? 'Подписку не удалось обновить. Сохранён предыдущий список.'
               : 'Импорт не удался. Проверьте ссылку или формат подписки.',
         );
       }
@@ -361,6 +372,18 @@ class _HomeState extends State<Home> {
                   : subscription.title,
             ),
             children: [
+              if (subscription.canRefresh)
+                ListTile(
+                  leading: const Icon(Icons.refresh_rounded),
+                  title: const Text('Обновить подписку'),
+                  onTap: _importing || _validating
+                      ? null
+                      : () => _updateSubscriptions(
+                          () =>
+                              widget.core.refreshSubscription(subscription.id),
+                          refresh: true,
+                        ),
+                ),
               for (final server in subscription.servers)
                 ListTile(
                   leading: const Icon(Icons.dns_outlined),
@@ -391,7 +414,7 @@ class _HomeState extends State<Home> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : const Icon(Icons.add_rounded),
-        label: Text(_importing ? 'Импорт…' : 'Добавить подписку'),
+        label: Text(_importing ? 'Загрузка…' : 'Добавить подписку'),
       ),
     ];
   }

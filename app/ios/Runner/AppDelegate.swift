@@ -35,11 +35,17 @@ import UIKit
           } else {
             result(failure)
           }
-        case "importSubscription":
-          guard let input = args["input"] as? String,
-            let updated = HyRouteAddSubscription(try store.read(), input, args["fromUrl"] as? Bool ?? false),
-            let view = HyRouteStateView(updated)
-          else {
+        case "importSubscription", "refreshSubscription":
+          let state = try store.read()
+          let updated: String?
+          if call.method == "refreshSubscription" {
+            updated = (args["id"] as? String).flatMap { HyRouteRefreshSubscription(state, $0) }
+          } else {
+            updated = (args["input"] as? String).flatMap {
+              HyRouteAddSubscription(state, $0, args["fromUrl"] as? Bool ?? false)
+            }
+          }
+          guard let updated, let view = HyRouteStateView(updated) else {
             result(failure)
             return
           }

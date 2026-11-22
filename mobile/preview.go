@@ -25,31 +25,37 @@ func importInput(input string, fromURL bool) (string, error) {
 }
 
 type serverPreview struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Host     string `json:"host,omitempty"`
-	Protocol string `json:"protocol,omitempty"`
-	Balance  bool   `json:"balance,omitempty"`
-	Missing  bool   `json:"missing,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Host            string `json:"host,omitempty"`
+	Protocol        string `json:"protocol,omitempty"`
+	Balance         bool   `json:"balance,omitempty"`
+	BalanceStrategy string `json:"balanceStrategy,omitempty"`
+	Missing         bool   `json:"missing,omitempty"`
 }
 
 type subscriptionPreview struct {
-	ID      string          `json:"id,omitempty"`
-	Title   string          `json:"title,omitempty"`
-	Servers []serverPreview `json:"servers"`
+	ID         string          `json:"id,omitempty"`
+	Title      string          `json:"title,omitempty"`
+	Servers    []serverPreview `json:"servers"`
+	CanRefresh bool            `json:"canRefresh,omitempty"`
 }
 
 func previewSubscription(id string, imported importedSubscription) subscriptionPreview {
 	preview := subscriptionPreview{ID: id, Title: imported.Title}
 	for _, server := range imported.Servers {
-		preview.Servers = append(preview.Servers, serverPreview{
+		item := serverPreview{
 			ID:       server.ID,
 			Name:     server.Name,
 			Host:     server.Host,
 			Protocol: server.Protocol,
 			Balance:  server.Balance != nil,
 			Missing:  server.Missing,
-		})
+		}
+		if server.Balance != nil {
+			item.BalanceStrategy = server.Balance.StrategyName()
+		}
+		preview.Servers = append(preview.Servers, item)
 	}
 	return preview
 }

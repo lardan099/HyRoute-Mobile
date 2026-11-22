@@ -112,6 +112,71 @@ func TestImportSelectableXrayBalance(t *testing.T) {
 	}
 }
 
+const testXrayLeastPing = `{
+  "remarks":"⚡️ Автовыбор",
+  "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":32100}],
+  "dns":{"servers":["provider-dns.example"]},
+  "burstObservatory":{"subjectSelector":["node-"],"pingConfig":{
+    "destination":"https://provider-probe.example/check","interval":"30s","timeout":"5s","sampling":3}},
+  "outbounds":[
+    {"protocol":"vless","tag":"node-nl","settings":{"vnext":[{"address":"nl.example","port":443,"users":[{"id":"test-nl","encryption":"none"}]}]},"streamSettings":{"security":"tls"}},
+    {"protocol":"vless","tag":"node-de","settings":{"vnext":[{"address":"de.example","port":443,"users":[{"id":"test-de","encryption":"none"}]}]},"streamSettings":{"security":"tls"}},
+    {"protocol":"vless","tag":"node-de-2","settings":{"vnext":[{"address":"second.example","port":443,"users":[{"id":"test-de2","encryption":"none"}]}]},"streamSettings":{"security":"tls"}},
+    {"protocol":"freedom","tag":"direct"},
+    {"protocol":"dns","tag":"provider-dns"}],
+  "routing":{"balancers":[{"tag":"auto","selector":["node-nl","node-de"],"fallbackTag":"node-de","strategy":{"type":"leastPing"}}],
+    "rules":[{"type":"field","inboundTag":["socks"],"port":53,"outboundTag":"provider-dns"},
+    {"type":"field","domain":["provider-direct.example"],"outboundTag":"direct"},
+    {"type":"field","ip":["192.0.2.0/24"],"balancerTag":"auto"},
+    {"type":"field","network":"tcp,udp","balancerTag":"auto"}]}
+}`
+
+func TestImportPanelLeastPingAsOneProfile(t *testing.T) {
+	raw, err := ImportSubscription([]byte(testXrayLeastPing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported importedSubscription
+	if err := json.Unmarshal([]byte(raw), &imported); err != nil {
+		t.Fatal(err)
+	}
+	if len(imported.Servers) != 1 || imported.Servers[0].Name != "⚡️ Автовыбор" || imported.Servers[0].Balance == nil {
+		t.Fatal("expected a single selectable auto profile")
+	}
+	balance := imported.Servers[0].Balance
+	if balance.StrategyName() != "leastPing" || len(balance.Nodes) != 3 || balance.FallbackNode != 2 ||
+		balance.ProbeInterval.String() != "30s" || balance.ProbeTimeout.String() != "5s" || balance.ProbeSamples != 3 {
+		t.Fatal("lost node selection, fallback or probe settings")
+	}
+	for _, forbidden := range []string{"32100", "provider-dns.example", "provider-direct.example", "provider-probe.example"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("provider configuration leaked into the saved profile: %s", forbidden)
+		}
+	}
+}
+
+func TestPanelBalanceKeepsOrdinaryServers(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.UserAgent(), "Happ/") {
+			io.WriteString(w, testXrayLeastPing)
+			return
+		}
+		io.WriteString(w, "vless://example-user@regular.example:443?security=tls#Regular")
+	}))
+	defer server.Close()
+	raw, err := fetchSubscription(server.Client(), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported importedSubscription
+	if err := json.Unmarshal([]byte(raw), &imported); err != nil {
+		t.Fatal(err)
+	}
+	if len(imported.Servers) != 2 || imported.Servers[0].Balance == nil || imported.Servers[1].Name != "Regular" {
+		t.Fatal("expected auto profile alongside the original country profiles")
+	}
+}
+
 func TestFetchXrayBalanceKeepsWorkingProfileOnFailedProbe(t *testing.T) {
 	var supported atomic.Bool
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
