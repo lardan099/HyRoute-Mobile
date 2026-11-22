@@ -51,6 +51,10 @@ Future<void> _tap(WidgetTester tester, String label) async {
 
 Future<void> _importTestSubscription(WidgetTester tester) async {
   await _tap(tester, 'Подписки');
+  await _submitTestSubscription(tester);
+}
+
+Future<void> _submitTestSubscription(WidgetTester tester) async {
   await _tap(tester, 'Добавить подписку');
   await tester.enterText(
     find.byType(TextField),
@@ -61,6 +65,24 @@ Future<void> _importTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('imports after the subscription tab saves its scroll offset', (
+    tester,
+  ) async {
+    await _openApp(tester);
+    await _tap(tester, 'Подписки');
+    final scrollable = tester.state<ScrollableState>(find.byType(Scrollable));
+    scrollable.position.jumpTo(1);
+    await tester.pumpAndSettle();
+    await _submitTestSubscription(tester);
+    expect(tester.takeException(), isNull);
+    await _tap(tester, 'Тестовая подписка');
+    expect(find.text('Нидерланды'), findsOneWidget);
+    await _tap(tester, 'Главная');
+    await _tap(tester, 'Подписки');
+    expect(tester.takeException(), isNull);
+    expect(find.text('Нидерланды'), findsOneWidget);
+  });
+
   testWidgets('imports a subscription and selects its first profile', (
     tester,
   ) async {

@@ -282,9 +282,10 @@ class _HomeState extends State<Home> {
             subtitle: Text('Импортируйте HTTPS-ссылку, Hysteria 2 или VLESS.'),
           ),
         ),
-      for (final subscription in _subscriptions)
+      for (final (index, subscription) in _subscriptions.indexed)
         Card(
           child: ExpansionTile(
+            key: PageStorageKey('subscription:$index'),
             leading: const Icon(Icons.layers_outlined),
             title: Text(
               subscription.title.isEmpty
