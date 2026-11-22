@@ -224,8 +224,9 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
             ),
             FilledButton(
               onPressed: () {
-                if (address.trim().isNotEmpty)
+                if (address.trim().isNotEmpty) {
                   Navigator.pop(dialog, address.trim());
+                }
               },
               child: const Text('Сохранить'),
             ),

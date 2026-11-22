@@ -114,6 +114,34 @@ class _DiagnosticsTestCore extends _TestCore
   Future<void> cancelProbe() async {}
 }
 
+class _MaintenanceTestCore extends _DiagnosticsTestCore
+    implements MaintenanceControl {
+  int refreshes = 0;
+  String? importedKind;
+  final sources = <String, String>{'site': '', 'ip': ''};
+
+  @override
+  Future<ClientState> refreshDue() async {
+    refreshes++;
+    return state;
+  }
+
+  @override
+  Future<Map<String, String>> geoSources() async => sources;
+
+  @override
+  Future<void> setGeoSource(String kind, String address) async {
+    sources[kind == 'geosite' ? 'site' : 'ip'] = address;
+  }
+
+  @override
+  Future<bool> importGeoFile(String kind) async {
+    importedKind = kind;
+    sources[kind == 'geosite' ? 'site' : 'ip'] = 'file';
+    return true;
+  }
+}
+
 Future<_TestCore> _openApp(WidgetTester tester, {_TestCore? core}) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
@@ -146,6 +174,39 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('configures a separate HTTPS source and local GeoIP file', (
+    tester,
+  ) async {
+    final core = _MaintenanceTestCore();
+    await _openApp(tester, core: core);
+    await _tap(tester, 'Правила');
+    await _tap(tester, 'Базы правил');
+    await _tap(tester, 'geosite.dat ▾');
+    await _tap(tester, 'Указать ссылку');
+    await tester.enterText(
+      find.byType(TextFormField),
+      'https://example.org/geosite.dat',
+    );
+    await _tap(tester, 'Сохранить');
+    expect(core.sources['site'], 'https://example.org/geosite.dat');
+    await _tap(tester, 'geoip.dat ▾');
+    await _tap(tester, 'Импортировать файл');
+    expect(core.importedKind, 'geoip');
+    expect(core.sources['ip'], 'file');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('checks for updates when returning to the app', (tester) async {
+    final core = _MaintenanceTestCore();
+    await _openApp(tester, core: core);
+    final before = core.refreshes;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(core.refreshes, before + 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('opens the VPN journal and checks servers at each scope', (
     tester,
   ) async {

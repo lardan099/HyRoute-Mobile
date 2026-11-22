@@ -101,8 +101,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     _updatingAutomatically = true;
     try {
       final state = await (core as MaintenanceControl).refreshDue();
-      if (mounted && !_importing && !_validating)
+      if (mounted && !_importing && !_validating) {
         setState(() => _restore(state));
+      }
     } on PlatformException {
       // The saved state remains usable until the next attempt.
     } on MissingPluginException {
