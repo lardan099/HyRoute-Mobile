@@ -1,0 +1,65 @@
+name: Mobile Go bindings
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - platform: Android
+            runner: ubuntu-latest
+            target: android/arm64,android/amd64
+            output: HyRouteCore.aar
+          - platform: iOS
+            runner: macos-latest
+            target: ios
+            output: HyRouteCore.xcframework
+    env:
+      MOBILE_TOOLS_VERSION: v0.0.0-20261117202452-47699113848a
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.27.x'
+          check-latest: true
+      - name: Install Go mobile tools
+        shell: bash
+        run: |
+          go get -tool "golang.org/x/mobile/cmd/gobind@${MOBILE_TOOLS_VERSION}"
+          go install golang.org/x/mobile/cmd/gobind golang.org/x/mobile/cmd/gomobile
+          go env GOPATH | sed 's|$|/bin|' >> "$GITHUB_PATH"
+      - name: Test mobile Go code
+        run: go test ./...
+      - name: Build bindings
+        env:
+          MOBILE_TARGET: ${{ matrix.target }}
+          MOBILE_OUTPUT: ${{ matrix.output }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          gomobile bind -trimpath -target "$MOBILE_TARGET" -o "dist/$MOBILE_OUTPUT" ./mobile
+      - name: Build Android routing adapter
+        if: matrix.platform == 'Android'
+        shell: bash
+        run: |
+          work="$(mktemp -d)"
+          unzip -p dist/HyRouteCore.aar classes.jar > "$work/core.jar"
+          javac --release 8 -cp "$ANDROID_HOME/platforms/android-35/android.jar:$work/core.jar" \
+            -d "$work/classes" mobile/android/src/main/java/io/hyroute/mobile/AndroidRouting.java
+          jar cf dist/HyRouteAndroidRouting.jar -C "$work/classes" .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: HyRouteCore-${{ matrix.platform }}
+          path: |
+            dist/${{ matrix.output }}
+            dist/HyRouteAndroidRouting.jar
+          if-no-files-found: error

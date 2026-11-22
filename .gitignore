@@ -1,0 +1,16 @@
+/.dev/
+/dist/
+/out/
+.gradle/
+local.properties
+.env
+.env.*
+*.apk
+*.aab
+*.aar
+*.ipa
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.xcframework/
