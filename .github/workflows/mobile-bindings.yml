@@ -114,7 +114,7 @@ jobs:
           flutter --suppress-analytics build ios --release --no-codesign --no-pub
           bundle=build/ios/iphoneos/Runner.app
           /usr/libexec/PlistBuddy -c 'Print CFBundleSupportedPlatforms:0' "$bundle/Info.plist" | grep -Fx iPhoneOS
-          xcrun lipo -verify_arch arm64 "$bundle/Runner"
+          xcrun lipo "$bundle/Runner" -verify_arch arm64
           work="$(mktemp -d)"
           mkdir "$work/Payload"
           ditto "$bundle" "$work/Payload/Runner.app"
