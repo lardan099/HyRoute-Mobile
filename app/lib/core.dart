@@ -245,6 +245,7 @@ class RouteRule {
     this.destination = '',
     this.port = '',
     this.package = '',
+    this.appName = '',
     this.server = '',
     this.protocol = '',
   });
@@ -256,6 +257,7 @@ class RouteRule {
       destination: (json['domains'] as List<dynamic>? ?? const []).join('\n'),
       port: json['ports'] as String? ?? '',
       package: apps.isEmpty ? '' : apps.first['pattern'] as String,
+      appName: apps.isEmpty ? '' : json['name'] as String? ?? '',
       server: json['profile'] as String? ?? '',
       protocol: json['protocol'] as String? ?? '',
     );
@@ -265,18 +267,20 @@ class RouteRule {
   final String destination;
   final String port;
   final String package;
+  final String appName;
   final String server;
   final String protocol;
 
   String get title => [
     if (destination.isNotEmpty) destination.replaceAll('\n', ', '),
-    if (package.isNotEmpty) package,
+    if (package.isNotEmpty) appName.isEmpty ? package : appName,
     if (port.isNotEmpty) 'Порт $port',
     if (protocol.isNotEmpty) protocol.toUpperCase(),
   ].join(' · ');
 
   Map<String, Object> toJson() => {
     'action': action.value,
+    if (package.isNotEmpty && appName.isNotEmpty) 'name': appName,
     if (destination.isNotEmpty)
       'domains': destination
           .split('\n')

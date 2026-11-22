@@ -256,7 +256,9 @@ class _RuleEditorState extends State<RuleEditor> {
   late String _server = widget.initial?.server ?? '';
   late String _protocol = widget.initial?.protocol ?? '';
   late bool _advanced = _port.text.isNotEmpty || _protocol.isNotEmpty;
-  String? _appName;
+  late String? _appName = widget.initial?.appName.isNotEmpty == true
+      ? widget.initial!.appName
+      : null;
   String? _error;
   var _saving = false;
 
@@ -293,6 +295,7 @@ class _RuleEditorState extends State<RuleEditor> {
         destination: destinations.join('\n'),
         port: port,
         package: package,
+        appName: _appName ?? '',
         server: _action == RouteAction.tunnel ? _server : '',
         protocol: _protocol,
       ),
@@ -734,7 +737,11 @@ class _ScopeEditorState extends State<ScopeEditor> {
     if (_scope != AppScope.all &&
         (packages.isEmpty ||
             packages.any((package) => !_packageId.hasMatch(package)))) {
-      setState(() => _error = 'Укажите хотя бы один корректный пакет Android.');
+      setState(
+        () => _error = packages.isEmpty
+            ? 'Выберите хотя бы одно приложение.'
+            : 'Проверьте введённые идентификаторы приложений.',
+      );
       return;
     }
     Navigator.pop(context, (_scope, packages));

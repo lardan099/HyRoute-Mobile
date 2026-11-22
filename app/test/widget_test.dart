@@ -182,6 +182,7 @@ void main() {
     await _tap(tester, 'Приложение');
     await _tap(tester, 'Тестовый браузер');
     await _tap(tester, 'Сохранить');
+    expect(find.text('Тестовый браузер'), findsOneWidget);
     expect(jsonDecode(core.configuration!)['rules'].single['apps'], [
       {'kind': 'package', 'pattern': 'org.example.app'},
     ]);
