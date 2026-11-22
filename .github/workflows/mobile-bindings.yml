@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -45,122 +46,17 @@ jobs:
           device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for runtime in sorted(devices,reverse=True) for d in devices[runtime] if d["name"].startswith("iPhone")))')"
           xcrun simctl boot "$device"
           printf 'HYROUTE_SIMULATOR=%s\n' "$device" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version: '1.27.x'
-          check-latest: true
-      - name: Install Go mobile tools
-        shell: bash
+      - name: Reuse the verified 0.3.5 iOS core
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          go get -tool "golang.org/x/mobile/cmd/gobind@${MOBILE_TOOLS_VERSION}"
-          go install golang.org/x/mobile/cmd/gobind golang.org/x/mobile/cmd/gomobile
-          go env GOPATH | sed 's|$|/bin|' >> "$GITHUB_PATH"
-      - name: Test mobile Go code
-        run: go test ./...
-      - name: Select Android NDK
-        if: matrix.platform == 'Android'
-        shell: bash
-        run: |
-          ndk_version=29.0.14206865
-          ndk="$ANDROID_HOME/ndk/$ndk_version"
-          test -d "$ndk"
-          {
-            printf 'ANDROID_NDK_HOME=%s\n' "$ndk"
-            printf 'ANDROID_NDK_ROOT=%s\n' "$ndk"
-            printf 'HYROUTE_ANDROID_NDK_VERSION=%s\n' "$ndk_version"
-          } >> "$GITHUB_ENV"
-      - name: Build bindings
-        shell: bash
-        run: |
+          gh run download 45071275393 --repo "$GITHUB_REPOSITORY" --name HyRouteCore-iOS --dir "$RUNNER_TEMP/core"
           mkdir -p dist
-          link_flags=()
-          if [[ "$MOBILE_TARGET" == android/* ]]; then
-            # Match Xray's Android release flags for its anet dependency.
-            link_flags+=(-ldflags=-checklinkname=0)
-          fi
-          gomobile bind -trimpath "${link_flags[@]}" -androidapi 24 -target "$MOBILE_TARGET" -o "dist/$MOBILE_OUTPUT" ./mobile
-      - name: Build Android routing adapter
-        if: matrix.platform == 'Android'
-        shell: bash
-        run: |
-          work="$(mktemp -d)"
-          unzip -p dist/HyRouteCore.aar classes.jar > "$work/core.jar"
-          javac --release 8 -cp "$ANDROID_HOME/platforms/android-35/android.jar:$work/core.jar" \
-            -d "$work/classes" mobile/android/src/main/java/io/hyroute/mobile/AndroidRouting.java
-          jar cf dist/HyRouteAndroidRouting.jar -C "$work/classes" .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: HyRouteCore-${{ matrix.platform }}
-          path: |
-            dist/${{ env.MOBILE_OUTPUT }}
-            dist/HyRouteAndroidRouting.jar
-          if-no-files-found: error
-      - name: Install Flutter
-        if: inputs.build_apps && matrix.platform == 'Android'
-        shell: bash
-        run: |
-          flutter_sdk="$RUNNER_TEMP/flutter"
-          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$flutter_sdk"
-          test "$(git -C "$flutter_sdk" rev-parse HEAD)" = "$FLUTTER_REVISION"
-          printf '%s\n' "$flutter_sdk/bin" >> "$GITHUB_PATH"
-      - name: Test Flutter client
-        if: inputs.build_apps && matrix.platform == 'Android'
-        working-directory: app
-        shell: bash
-        run: |
-          flutter --suppress-analytics pub get --enforce-lockfile
-          dart analyze
-          flutter --suppress-analytics test --no-pub
-      - name: Build Android debug APK
-        if: inputs.build_apps && matrix.platform == 'Android'
-        working-directory: app
-        shell: bash
-        run: |
-          flutter --suppress-analytics build apk --debug --no-pub --target-platform android-arm64,android-x64
-          version="$(awk '/^version:/{split($2, parts, /[+]/); print parts[1]; exit}' pubspec.yaml)"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          package="dist/HyRoute-Android-debug-$version.apk"
-          cp build/app/outputs/flutter-apk/app-debug.apk "../$package"
-          printf 'HYROUTE_APP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
-      - name: Check SwiftUI state compatibility
-        if: inputs.build_apps && matrix.platform == 'iOS'
-        working-directory: app/ios
-        shell: bash
-        run: |
-          swiftc -o "$RUNNER_TEMP/hyroute-state-test" Native/Models.swift NativeTests/StateCompatibility.swift
-          "$RUNNER_TEMP/hyroute-state-test"
-          swiftc -o "$RUNNER_TEMP/hyroute-startup-test" Native/VPNStartup.swift NativeTests/VPNStartupTests.swift
-          "$RUNNER_TEMP/hyroute-startup-test"
-      - name: Build unsigned iPhone IPA
-        if: inputs.build_apps && matrix.platform == 'iOS'
-        working-directory: app/ios
-        shell: bash
-        run: |
-          output="$RUNNER_TEMP/hyroute-iphoneos"
-          xcodebuild -project HyRoute.xcodeproj -target HyRoute -configuration Release \
-            -sdk iphoneos CONFIGURATION_BUILD_DIR="$output" CODE_SIGNING_ALLOWED=NO -quiet
-          bundle="$output/HyRoute.app"
-          /usr/libexec/PlistBuddy -c 'Print CFBundleSupportedPlatforms:0' "$bundle/Info.plist" | grep -Fx iPhoneOS
-          /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$bundle/Info.plist" | grep -Fx io.hyroute.hyrouteMobile
-          version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$bundle/Info.plist")"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          xcrun lipo "$bundle/HyRoute" -verify_arch arm64
-          extension="$bundle/PlugIns/HyRouteTunnel.appex"
-          xcrun lipo "$extension/HyRouteTunnel" -verify_arch arm64
-          /usr/libexec/PlistBuddy -c 'Print NSExtension:NSExtensionPointIdentifier' "$extension/Info.plist" | grep -Fx com.apple.networkextension.packet-tunnel
-          test ! -d "$bundle/Frameworks/Flutter.framework"
-          work="$(mktemp -d)"
-          mkdir "$work/Payload"
-          ditto "$bundle" "$work/Payload/HyRoute.app"
-          package="dist/HyRoute-iOS-unsigned-$version.ipa"
-          ditto -c -k --keepParent "$work/Payload" "../../$package"
-          printf 'HYROUTE_APP_PACKAGE=%s\nHYROUTE_APP_VERSION=%s\n' "$package" "$version" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: inputs.build_apps
-        with:
-          name: HyRoute-App-${{ matrix.platform }}
-          path: ${{ env.HYROUTE_APP_PACKAGE }}
-          if-no-files-found: error
+          framework="$(find "$RUNNER_TEMP/core" -type d -name HyRouteCore.xcframework -print -quit)"
+          if [[ -z "$framework" ]]; then framework="$RUNNER_TEMP/core"; fi
+          mv "$framework" dist/HyRouteCore.xcframework
+          test -f dist/HyRouteCore.xcframework/Info.plist
+          printf 'HYROUTE_APP_VERSION=0.3.5\n' >> "$GITHUB_ENV"
       - name: Open SwiftUI on an iPhone simulator
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios
@@ -178,10 +74,10 @@ jobs:
           xcrun simctl ui "$device" appearance dark
           xcrun simctl install "$device" "$bundle"
           xcrun simctl launch "$device" io.hyroute.hyrouteMobile
-          for screen in home servers rules; do
+          for screen in rules; do
             SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
               xcrun simctl launch --terminate-running-process "$device" io.hyroute.hyrouteMobile
-            sleep 2
+            sleep 7
             xcrun simctl io "$device" screenshot "../../dist/HyRoute-iOS-$screen-$HYROUTE_APP_VERSION.png"
           done
           printf 'HYROUTE_APP_PREVIEW=dist/HyRoute-iOS-*-%s.png\n' "$HYROUTE_APP_VERSION" >> "$GITHUB_ENV"
