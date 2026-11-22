@@ -38,6 +38,13 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - name: Boot iPhone simulator
+        if: inputs.build_apps && matrix.platform == 'iOS'
+        shell: bash
+        run: |
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for runtime in sorted(devices,reverse=True) for d in devices[runtime] if d["name"].startswith("iPhone")))')"
+          xcrun simctl boot "$device"
+          printf 'HYROUTE_SIMULATOR=%s\n' "$device" >> "$GITHUB_ENV"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.27.x'
@@ -141,18 +148,17 @@ jobs:
       - name: Open SwiftUI on an iPhone simulator
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios
+        timeout-minutes: 8
         shell: bash
         run: |
-          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for runtime in sorted(devices,reverse=True) for d in devices[runtime] if d["name"].startswith("iPhone")))')"
+          device="$HYROUTE_SIMULATOR"
+          trap 'xcrun simctl shutdown "$device"' EXIT
           output="$RUNNER_TEMP/hyroute-iphonesimulator"
           xcodebuild -project HyRoute.xcodeproj -target HyRoute -configuration Debug \
             -sdk iphonesimulator ARCHS="$(uname -m)" CONFIGURATION_BUILD_DIR="$output" CODE_SIGNING_ALLOWED=NO -quiet
           bundle="$output/HyRoute.app"
           codesign --force --sign - "$bundle"
-          xcrun simctl boot "$device"
-          trap 'xcrun simctl shutdown "$device"' EXIT
           xcrun simctl bootstatus "$device" -b
-          xcrun simctl status_bar "$device" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState unplugged --batteryLevel 100
           xcrun simctl ui "$device" appearance dark
           xcrun simctl install "$device" "$bundle"
           xcrun simctl launch "$device" io.hyroute.hyrouteMobile
