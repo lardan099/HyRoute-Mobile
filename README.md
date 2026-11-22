@@ -18,3 +18,24 @@ go vet ./...
 
 Ручной workflow **Mobile Go bindings** собирает AAR и адаптер для Android,
 а также XCFramework для iOS.
+
+## Интерфейс
+
+Клиент Flutter находится в `app/`. Для веб-предпросмотра и тестов
+нативные привязки не нужны.
+
+```sh
+cd app
+flutter pub get
+flutter test
+flutter run -d chrome
+```
+
+Для импорта подписок на телефоне положите артефакт той же ревизии
+в `dist/HyRouteCore.aar` для Android или `dist/HyRouteCore.xcframework`
+для iOS. Клиент вызывает Go-ядро через платформенный канал. UI получает
+только сведения для показа. Изменения правил и выбранный профиль
+пока хранятся в памяти на время работы приложения.
+
+Для тестовой сборки включите `build_apps` в workflow **Mobile Go bindings**.
+Он выдаст APK для Android и архив приложения для симулятора iOS.
