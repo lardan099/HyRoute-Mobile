@@ -16,6 +16,19 @@ private actor NativeCore {
 
   func vpnState() throws -> String { try store.read() }
 
+  func journalPath() throws -> String {
+    try store.prepareDirectory().appendingPathComponent("vpn-journal.json").path
+  }
+
+  func record(_ event: String) {
+    if let path = try? journalPath() { HyRouteRecordVPNEvent(path, event) }
+  }
+
+  func journal() throws -> [String] {
+    let raw = HyRouteVPNJournal(try journalPath(), VPNStorage.tunnelJournal)
+    return try JSONDecoder().decode([String].self, from: Data(raw.utf8))
+  }
+
   func importSubscription(_ input: String) throws -> ClientState {
     let url = URLComponents(string: input)
     let fromURL = url?.scheme?.lowercased() == "https" &&
@@ -76,15 +89,18 @@ final class Client: ObservableObject {
     if vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting {
       startingVPN = false
       (manager?.connection as? NETunnelProviderSession)?.stopTunnel()
+      await core.record("vpn_stop")
       syncVPNStatus()
       return
     }
     guard state.selected != nil, vpnStatus != .disconnecting else { return }
     vpnBusy = true
     defer { vpnBusy = false }
+    await core.record("vpn_request")
     do {
       let current = try await vpnManager()
       if !current.isEnabled {
+        await core.record("vpn_permission")
         current.isEnabled = true
         try await current.saveToPreferences()
         try await current.loadFromPreferences()
@@ -97,9 +113,19 @@ final class Client: ObservableObject {
       syncVPNStatus()
     } catch {
       startingVPN = false
+      await core.record("vpn_system_error")
       self.error = "Не удалось запустить VPN. Проверьте разрешение iOS и выбранный профиль."
       syncVPNStatus()
     }
+  }
+
+  func journal() async throws -> [String] { try await core.journal() }
+
+  func probeHandle(scope: String, id: String) async throws -> ProbeHandle {
+    let snapshot = try await core.vpnState()
+    let journal = try await core.journalPath()
+    let session = vpnStatus == .connected ? manager?.connection as? NETunnelProviderSession : nil
+    return ProbeHandle(snapshot: snapshot, scope: scope, id: id, journal: journal, session: session)
   }
 
   func syncVPNStatus() {

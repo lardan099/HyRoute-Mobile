@@ -21,7 +21,30 @@ abstract interface class VPNControl {
   Future<void> stopVpn();
 }
 
-class PlatformCore implements ClientCore, VPNControl {
+abstract interface class DiagnosticsControl {
+  Future<List<String>> vpnJournal();
+  Future<ProbeSnapshot> startProbe(String scope, String id);
+  Future<ProbeSnapshot> probeStatus();
+  Future<void> cancelProbe();
+}
+
+class ProbeSnapshot {
+  const ProbeSnapshot(this.done, this.results);
+
+  factory ProbeSnapshot.decode(String? raw) {
+    if (raw == null) throw const FormatException('Missing probe snapshot');
+    final json = jsonDecode(raw) as Map<String, dynamic>;
+    return ProbeSnapshot(
+      json['done'] as bool,
+      (json['results'] as List<dynamic>).cast<Map<String, dynamic>>(),
+    );
+  }
+
+  final bool done;
+  final List<Map<String, dynamic>> results;
+}
+
+class PlatformCore implements ClientCore, VPNControl, DiagnosticsControl {
   const PlatformCore();
 
   static const _channel = MethodChannel('io.hyroute/core');
@@ -42,6 +65,28 @@ class PlatformCore implements ClientCore, VPNControl {
 
   @override
   Future<void> stopVpn() => _channel.invokeMethod<void>('stopVpn');
+
+  @override
+  Future<List<String>> vpnJournal() async {
+    final raw = await _channel.invokeMethod<String>('vpnJournal');
+    return (jsonDecode(raw ?? '[]') as List<dynamic>).cast<String>();
+  }
+
+  @override
+  Future<ProbeSnapshot> startProbe(String scope, String id) async =>
+      ProbeSnapshot.decode(
+        await _channel.invokeMethod<String>('probeStart', {
+          'scope': scope,
+          'id': id,
+        }),
+      );
+
+  @override
+  Future<ProbeSnapshot> probeStatus() async =>
+      ProbeSnapshot.decode(await _channel.invokeMethod<String>('probeStatus'));
+
+  @override
+  Future<void> cancelProbe() => _channel.invokeMethod<void>('probeCancel');
 
   @override
   Future<ClientState> loadState() async {

@@ -39,6 +39,8 @@ type TCPFragment struct {
 
 const MaxBalanceNodes = 64
 
+const ProbeURL = "https://connectivitycheck.gstatic.com/generate_204"
+
 var fragmentRange = regexp.MustCompile(`^[0-9]{1,4}(-[0-9]{1,4})?$`)
 
 func (f TCPFragment) Validate() error {
@@ -124,14 +126,9 @@ func BalanceOutbounds(b Balance, ips []netip.Addr, prefix, tag string) ([]any, m
 		if !ips[i].IsValid() {
 			continue
 		}
-		out, err := Outbound(n.Settings, Run{Host: n.Host, Port: n.Port, Dial: ips[i]}, prefix+strconv.Itoa(i))
+		out, err := n.Outbound(ips[i], prefix+strconv.Itoa(i))
 		if err != nil {
 			return nil, nil, err
-		}
-		if n.Fragment != (TCPFragment{}) {
-			out["streamSettings"].(map[string]any)["finalmask"] = map[string]any{
-				"tcp": []any{map[string]any{"type": "fragment", "settings": n.Fragment}},
-			}
 		}
 		outbounds = append(outbounds, out)
 	}
@@ -155,6 +152,19 @@ func BalanceOutbounds(b Balance, ips []netip.Addr, prefix, tag string) ([]any, m
 	return outbounds, balancer, nil
 }
 
+func (n Node) Outbound(ip netip.Addr, tag string) (map[string]any, error) {
+	if err := n.Fragment.Validate(); err != nil {
+		return nil, err
+	}
+	out, err := Outbound(n.Settings, Run{Host: n.Host, Port: n.Port, Dial: ip}, tag)
+	if err == nil && n.Fragment != (TCPFragment{}) {
+		out["streamSettings"].(map[string]any)["finalmask"] = map[string]any{
+			"tcp": []any{map[string]any{"type": "fragment", "settings": n.Fragment}},
+		}
+	}
+	return out, err
+}
+
 // Observatory configures probes for all supplied outbound tag prefixes.
 func (b Balance) Observatory(prefixes []string) map[string]any {
 	interval, timeout, samples := b.ProbeInterval, b.ProbeTimeout, b.ProbeSamples
@@ -170,7 +180,7 @@ func (b Balance) Observatory(prefixes []string) map[string]any {
 	return map[string]any{
 		"subjectSelector": prefixes,
 		"pingConfig": map[string]any{
-			"destination": "https://connectivitycheck.gstatic.com/generate_204",
+			"destination": ProbeURL,
 			"interval":    interval.String(), "timeout": timeout.String(), "sampling": samples,
 		},
 	}

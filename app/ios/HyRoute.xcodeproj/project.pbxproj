@@ -18,6 +18,7 @@
 		A10000000000000000000012 /* VPNStorage.swift in Tunnel Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012; };
 		A10000000000000000000013 /* HyRouteBridge.m in Tunnel Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006; };
 		A10000000000000000000014 /* HyRouteCore.xcframework in Tunnel Frameworks */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008; };
+		A10000000000000000000015 /* DiagnosticsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018; };
 
 		B10000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyRouteApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Client.swift; sourceTree = "<group>"; };
@@ -35,6 +36,7 @@
 		B10000000000000000000015 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000016 = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = HyRouteTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000017 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Tunnel.xcconfig; sourceTree = "<group>"; };
+		B10000000000000000000018 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsViews.swift; sourceTree = "<group>"; };
 
 		C10000000000000000000001 = {
 			isa = PBXGroup;
@@ -43,7 +45,7 @@
 		};
 		C10000000000000000000002 = {
 			isa = PBXGroup;
-			children = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000003, B10000000000000000000004, B10000000000000000000012, B10000000000000000000013);
+			children = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000003, B10000000000000000000004, B10000000000000000000012, B10000000000000000000013, B10000000000000000000018);
 			path = Native;
 			sourceTree = "<group>";
 		};
@@ -70,7 +72,7 @@
 		D10000000000000000000001 = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005, A10000000000000000000006, A10000000000000000000009);
+			files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005, A10000000000000000000006, A10000000000000000000009, A10000000000000000000015);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D10000000000000000000002 = {

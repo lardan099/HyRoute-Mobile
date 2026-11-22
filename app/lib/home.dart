@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core.dart';
+import 'diagnostics.dart';
 import 'editors.dart';
 
 class Home extends StatefulWidget {
@@ -36,6 +37,19 @@ class _HomeState extends State<Home> {
     return core is VPNControl && (core as VPNControl).vpnAvailable
         ? core as VPNControl
         : null;
+  }
+
+  DiagnosticsControl? get _diagnostics =>
+      _vpn is DiagnosticsControl ? _vpn as DiagnosticsControl : null;
+
+  void _openProbe(String scope, String id) {
+    final core = _diagnostics;
+    if (core == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ProbePage(core: core, scope: scope, id: id),
+      ),
+    );
   }
 
   @override
@@ -422,6 +436,15 @@ class _HomeState extends State<Home> {
         hasProfile: selected != null,
         onToggle: _toggleVPN,
       ),
+      if (_diagnostics case final DiagnosticsControl core)
+        ListTile(
+          leading: const Icon(Icons.receipt_long_outlined),
+          title: const Text('Журнал VPN'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => VPNJournalPage(core: core)),
+          ),
+        ),
       const _SectionTitle('Основной профиль'),
       Card(
         child: selected == null
@@ -487,6 +510,13 @@ class _HomeState extends State<Home> {
                   : subscription.title,
             ),
             children: [
+              if (_diagnostics != null &&
+                  subscription.servers.any((server) => !server.missing))
+                ListTile(
+                  leading: const Icon(Icons.speed),
+                  title: const Text('Проверить всю подписку'),
+                  onTap: () => _openProbe('subscription', subscription.id),
+                ),
               if (subscription.canRefresh)
                 ListTile(
                   leading: const Icon(Icons.refresh_rounded),
@@ -505,9 +535,21 @@ class _HomeState extends State<Home> {
                       if (server.host.isNotEmpty) server.host,
                     ].join(' · '),
                   ),
-                  trailing: server.id == _selected
-                      ? const Icon(Icons.check_circle_outline)
-                      : null,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (server.id == _selected)
+                        const Icon(Icons.check_circle_outline),
+                      if (_diagnostics != null && !server.missing)
+                        IconButton(
+                          icon: const Icon(Icons.speed),
+                          tooltip: server.balance
+                              ? 'Проверить узлы группы'
+                              : 'Проверить задержку',
+                          onPressed: () => _openProbe('profile', server.id),
+                        ),
+                    ],
+                  ),
                   enabled: !server.missing,
                   onTap: server.missing || _importing || _validating
                       ? null

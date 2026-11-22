@@ -6,6 +6,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private let worker = DispatchQueue(label: "io.hyroute.tunnel")
   private var packetBridge: PacketBridge?
   private var session: NSObject?
+  private var probe: NSObject?
+  private var probeToken: UUID?
   private var generation = 0
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
@@ -14,12 +16,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       let generation = self.generation
       let geodata = VPNStorage.sharedGeodata ?? FileManager.default.temporaryDirectory
         .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
-      guard let state = options?["state"] as? String,
-            let prepared = HyRoutePrepareVPN(state, geodata.path) else {
+      let journal = VPNStorage.tunnelJournal
+      guard let state = options?["state"] as? String else {
+        HyRouteRecordVPNEvent(journal, "vpn_plan_error")
+        completionHandler(TunnelError.configuration)
+        return
+      }
+      guard let prepared = HyRoutePrepareVPN(state, geodata.path, journal) else {
         completionHandler(TunnelError.configuration)
         return
       }
 
+      HyRouteRecordVPNEvent(journal, "vpn_interface")
       self.setTunnelNetworkSettings(Self.networkSettings()) { error in
         self.worker.async {
           guard generation == self.generation else {
@@ -36,8 +44,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.packetBridge = bridge
             self.session = session
             bridge.start()
+            HyRouteRecordVPNEvent(journal, "vpn_running")
             completionHandler(nil)
           } catch {
+            HyRouteRecordVPNEvent(journal, (error as? TunnelError) == .engine ? "vpn_engine_error" : "vpn_tun_error")
             completionHandler(error)
           }
         }
@@ -48,11 +58,49 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
     worker.async {
       self.generation += 1
+      if let probe = self.probe { HyRouteCancelProbe(probe) }
+      self.probe = nil
+      self.probeToken = nil
       if let session = self.session { HyRouteStopVPN(session) }
       self.session = nil
       self.packetBridge?.close()
       self.packetBridge = nil
+      HyRouteRecordVPNEvent(VPNStorage.tunnelJournal, "vpn_stopped")
       completionHandler()
+    }
+  }
+
+  override func handleAppMessage(_ data: Data, completionHandler: ((Data?) -> Void)?) {
+    worker.async {
+      guard let command = try? JSONDecoder().decode(ProbeCommand.self, from: data) else {
+        completionHandler?(nil)
+        return
+      }
+      switch command.action {
+      case .start:
+        if let probe = self.probe { HyRouteCancelProbe(probe) }
+        self.probeToken = command.token
+        if let state = command.state, let scope = command.scope, let id = command.id {
+          self.probe = HyRouteStartProbe(state, scope, id, VPNStorage.tunnelJournal)
+        } else {
+          self.probe = nil
+        }
+      case .status:
+        guard self.probeToken == command.token else {
+          completionHandler?(nil)
+          return
+        }
+      case .cancel:
+        if self.probeToken == command.token {
+          if let probe = self.probe { HyRouteCancelProbe(probe) }
+          self.probe = nil
+          self.probeToken = nil
+        }
+        completionHandler?(Data())
+        return
+      }
+      let snapshot = self.probe.flatMap { HyRouteProbeSnapshot($0) }
+      completionHandler?(snapshot.map { Data($0.utf8) })
     }
   }
 

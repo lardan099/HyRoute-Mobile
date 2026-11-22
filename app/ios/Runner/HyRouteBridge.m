@@ -40,11 +40,17 @@ BOOL HyRouteUpdateGeo(void) {
     return MobileUpdateGeo(&error);
 }
 
-NSObject * _Nullable HyRoutePrepareVPN(NSString *state, NSString *geoDirectory) {
+NSObject * _Nullable HyRoutePrepareVPN(NSString *state, NSString *geoDirectory, NSString *journal) {
     MobileConfigureGeo(geoDirectory);
     NSError *error = nil;
     MobileVPNPlan *plan = MobileNewVPNPlan(state, NO, &error);
-    return error == nil ? [plan prepare:&error] : nil;
+    if (plan == nil) {
+        MobileRecordVPNEvent(journal, @"vpn_plan_error");
+        return nil;
+    }
+    MobileVPNPrepared *prepared = [plan prepare:&error];
+    if (prepared == nil) MobileRecordVPNEvent(journal, @"vpn_prepare_error");
+    return prepared;
 }
 
 NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd) {
@@ -54,4 +60,25 @@ NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd) {
 
 void HyRouteStopVPN(NSObject *session) {
     [(MobileVPNSession *)session stop];
+}
+
+void HyRouteRecordVPNEvent(NSString *path, NSString *event) {
+    MobileRecordVPNEvent(path, event);
+}
+
+NSString *HyRouteVPNJournal(NSString *appPath, NSString *tunnelPath) {
+    return MobileVPNJournal(appPath, tunnelPath) ?: @"[]";
+}
+
+NSObject * _Nullable HyRouteStartProbe(NSString *state, NSString *scope, NSString *profileID, NSString *journal) {
+    NSError *error = nil;
+    return MobileStartProbe(state, scope, profileID, journal, &error);
+}
+
+NSString * _Nullable HyRouteProbeSnapshot(NSObject *probe) {
+    return [(MobileProbeBatch *)probe snapshot];
+}
+
+void HyRouteCancelProbe(NSObject *probe) {
+    [(MobileProbeBatch *)probe cancel];
 }

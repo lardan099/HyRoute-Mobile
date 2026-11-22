@@ -69,6 +69,11 @@ private struct Dashboard: View {
       ConnectionStatus(client: client)
         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
         .listRowBackground(Color.clear)
+      NavigationLink {
+        VPNJournalPage(client: client)
+      } label: {
+        Label("Журнал VPN", systemImage: "list.bullet.rectangle")
+      }
       Section("Основной профиль") {
         if let selected = client.state.selected {
           Button { choosingProfile = true } label: {
@@ -258,6 +263,14 @@ private struct SubscriptionPage: View {
   var body: some View {
     if let item = client.state.subscriptions.first(where: { $0.id == id }) {
       List {
+        Section {
+          NavigationLink {
+            ProbePage(client: client, scope: "subscription", id: id)
+          } label: {
+            Label("Проверить всю подписку", systemImage: "speedometer")
+          }
+          .disabled(!item.servers.contains { $0.missing != true })
+        }
         if item.canRefresh == true {
           Section {
             Button { Task { await client.refresh(id) } } label: {
@@ -272,11 +285,22 @@ private struct SubscriptionPage: View {
         }
         Section("Профили") {
           ForEach(item.servers) { profile in
-            Button { Task { _ = await client.select(profile.id) } } label: {
-              ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
+            HStack {
+              Button { Task { _ = await client.select(profile.id) } } label: {
+                ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
+              }
+              .buttonStyle(.plain)
+              .disabled(client.busy || profile.missing == true)
+              if profile.missing != true {
+                NavigationLink {
+                  ProbePage(client: client, scope: "profile", id: profile.id)
+                } label: {
+                  Image(systemName: "speedometer").frame(width: 36, height: 40)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
+              }
             }
-            .buttonStyle(.plain)
-            .disabled(client.busy || profile.missing == true)
           }
         }
       }

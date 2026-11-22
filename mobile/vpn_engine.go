@@ -166,6 +166,15 @@ func (s *VPNSession) Stop() {
 	// closing flow must still pass protection rather than escape unprotected.
 }
 
+// ReleaseVPNProtection is called only after Android closes its TUN descriptor.
+func ReleaseVPNProtection() {
+	vpnRuntime.Lock()
+	defer vpnRuntime.Unlock()
+	if vpnRuntime.session == nil {
+		vpnRuntime.sockets.Store(nil)
+	}
+}
+
 func (p *vpnConfiguration) start(ctx context.Context, hooks VPNPlatform) (*core.Instance, error) {
 	raw, err := json.Marshal(p.xray)
 	if err != nil {

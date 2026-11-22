@@ -1,9 +1,16 @@
 import Foundation
 
 enum VPNStorage {
+  private static var sharedDirectory: URL? {
+    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.io.hyroute.mobile")
+  }
+
   static var sharedGeodata: URL? {
-    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.io.hyroute.mobile")?
-      .appendingPathComponent("geo", isDirectory: true)
+    sharedDirectory?.appendingPathComponent("geo", isDirectory: true)
+  }
+
+  static var tunnelJournal: String {
+    sharedDirectory?.appendingPathComponent("tunnel-journal.json").path ?? ""
   }
 
   static func prepareGeodata(legacy: URL) throws -> URL {
@@ -19,4 +26,13 @@ enum VPNStorage {
     }
     return directory
   }
+}
+
+struct ProbeCommand: Codable {
+  enum Action: String, Codable { case start, status, cancel }
+  let action: Action
+  let token: UUID
+  var scope: String?
+  var id: String?
+  var state: String?
 }

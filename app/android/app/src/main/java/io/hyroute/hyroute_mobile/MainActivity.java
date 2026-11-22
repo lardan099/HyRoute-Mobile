@@ -18,10 +18,16 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.StandardMethodCodec;
 import mobile.Mobile;
+import mobile.ProbeBatch;
 
 public class MainActivity extends FlutterActivity {
     private static final int VPN_PERMISSION = 600;
     private MethodChannel coreChannel;
+    private ProbeBatch probeBatch;
+
+    private String journalPath() {
+        return HyRouteVpnService.journalPath(getNoBackupFilesDir());
+    }
 
     @Override
     public void configureFlutterEngine(FlutterEngine flutterEngine) {
@@ -79,6 +85,24 @@ public class MainActivity extends FlutterActivity {
                 case "vpnStatus":
                     result.success(HyRouteVpnService.status());
                     break;
+                case "vpnJournal":
+                    result.success(Mobile.vpnJournal(journalPath(), ""));
+                    break;
+                case "probeStart":
+                    if (probeBatch != null) probeBatch.cancel();
+                    probeBatch = Mobile.startProbe(store.read(), call.argument("scope"), call.argument("id"), journalPath());
+                    result.success(probeBatch.snapshot());
+                    break;
+                case "probeStatus":
+                    result.success(probeBatch == null ? null : probeBatch.snapshot());
+                    break;
+                case "probeCancel":
+                    if (probeBatch != null) {
+                        probeBatch.cancel();
+                        probeBatch = null;
+                    }
+                    result.success(null);
+                    break;
                 case "startVpn":
                     runOnUiThread(() -> {
                         requestVpn();
@@ -106,14 +130,17 @@ public class MainActivity extends FlutterActivity {
 
     private void requestVpn() {
         if (!HyRouteVpnService.request()) return;
+        Mobile.recordVPNEvent(journalPath(), "vpn_request");
         try {
             Intent permission = VpnService.prepare(this);
             if (permission == null) {
                 launchVpn();
             } else {
+                Mobile.recordVPNEvent(journalPath(), "vpn_permission");
                 startActivityForResult(permission, VPN_PERMISSION);
             }
         } catch (RuntimeException e) {
+            Mobile.recordVPNEvent(journalPath(), "vpn_system_error");
             HyRouteVpnService.failed();
         }
     }
@@ -125,6 +152,7 @@ public class MainActivity extends FlutterActivity {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
             else startService(service);
         } catch (RuntimeException e) {
+            Mobile.recordVPNEvent(journalPath(), "vpn_service_error");
             HyRouteVpnService.failed();
         }
     }
@@ -134,7 +162,10 @@ public class MainActivity extends FlutterActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != VPN_PERMISSION) return;
         if (resultCode == RESULT_OK) launchVpn();
-        else HyRouteVpnService.permissionDenied();
+        else {
+            Mobile.recordVPNEvent(journalPath(), "vpn_denied");
+            HyRouteVpnService.permissionDenied();
+        }
     }
 
     private Map<String, String> launchableApps() {

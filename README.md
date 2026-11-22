@@ -12,6 +12,11 @@
 автовыбора VLESS. Клиент применяет правила из своего редактора. После правки
 профиля или правил переподключите VPN.
 
+В журнале на главной сохраняются последние события VPN и замеров, включая
+этап сбоя. На экране подписки можно измерить задержку отдельного сервера,
+узлов «Автовыбора» или всей подписки. Замер выполняет HTTPS-запрос через
+каждый сервер и показывает время до ответа `204`.
+
 Сетевое ядро включает [Xray-core v26.10.31](https://github.com/XTLS/Xray-core/tree/a4a3dff5b20c)
 под [MPL 2.0](https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c/LICENSE).
 
@@ -47,7 +52,7 @@ Keychain и сохраняет данные при обновлении с то�
 Для тестовой сборки включите `build_apps` в workflow **Mobile Go bindings**.
 Для сборки одной платформы укажите её в поле `platform`. Workflow выдаёт
 APK для Android и IPA для iPhone с версией в имени, например
-`HyRoute-Android-debug-0.3.0.apk` и `HyRoute-iOS-unsigned-0.3.0.ipa`.
+`HyRoute-Android-debug-0.3.1.apk` и `HyRoute-iOS-unsigned-0.3.1.ipa`.
 Для запуска VPN на iPhone нужны профили подписи Apple с Network Extension
 для HyRoute и HyRouteTunnel. App Group `group.io.hyroute.mobile` позволяет
 приложению и расширению использовать общие базы правил.
