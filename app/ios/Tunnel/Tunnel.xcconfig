@@ -1,0 +1,11 @@
+#include "../Native/App.xcconfig"
+
+PRODUCT_NAME = HyRouteTunnel
+PRODUCT_BUNDLE_IDENTIFIER = io.hyroute.hyrouteMobile.PacketTunnel
+APPLICATION_EXTENSION_API_ONLY = YES
+INFOPLIST_FILE = Tunnel/Info.plist
+INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO
+INFOPLIST_KEY_UILaunchScreen_Generation = NO
+ASSETCATALOG_COMPILER_APPICON_NAME =
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/Frameworks @executable_path/../../Frameworks
+SKIP_INSTALL = YES

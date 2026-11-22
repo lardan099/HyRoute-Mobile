@@ -1,4 +1,5 @@
 import Foundation
+import NetworkExtension
 import SwiftUI
 
 private enum CoreError: Error { case invalidResult }
@@ -8,9 +9,12 @@ private actor NativeCore {
 
   func load() throws -> ClientState {
     let folder = try store.prepareDirectory()
-    HyRouteConfigureGeo(folder.appendingPathComponent("geo", isDirectory: true).path)
+    let legacy = folder.appendingPathComponent("geo", isDirectory: true)
+    HyRouteConfigureGeo(try VPNStorage.prepareGeodata(legacy: legacy).path)
     return try view(store.read())
   }
+
+  func vpnState() throws -> String { try store.read() }
 
   func importSubscription(_ input: String) throws -> ClientState {
     let url = URLComponents(string: input)
@@ -50,15 +54,79 @@ private actor NativeCore {
 @MainActor
 final class Client: ObservableObject {
   private let core = NativeCore()
+  private var manager: NETunnelProviderManager?
+  private var startingVPN = false
   @Published private(set) var state = ClientState()
   @Published private(set) var ready = false
   @Published private(set) var busy = false
+  @Published private(set) var vpnBusy = false
+  @Published private(set) var vpnStatus: NEVPNStatus = .invalid
   @Published var error: String?
 
   func load() async {
     if await change("Не удалось открыть хранилище HyRoute.", { try await self.core.load() }) {
       ready = true
+      manager = try? await vpnManager()
+      syncVPNStatus()
     }
+  }
+
+  func toggleVPN() async {
+    guard !vpnBusy else { return }
+    if vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting {
+      startingVPN = false
+      (manager?.connection as? NETunnelProviderSession)?.stopTunnel()
+      syncVPNStatus()
+      return
+    }
+    guard state.selected != nil, vpnStatus != .disconnecting else { return }
+    vpnBusy = true
+    defer { vpnBusy = false }
+    do {
+      let current = try await vpnManager()
+      if !current.isEnabled {
+        current.isEnabled = true
+        try await current.saveToPreferences()
+        try await current.loadFromPreferences()
+      }
+      manager = current
+      guard let session = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
+      startingVPN = true
+      let snapshot = try await core.vpnState()
+      try session.startTunnel(options: ["state": snapshot as NSString])
+      syncVPNStatus()
+    } catch {
+      startingVPN = false
+      self.error = "Не удалось запустить VPN. Проверьте разрешение iOS и выбранный профиль."
+      syncVPNStatus()
+    }
+  }
+
+  func syncVPNStatus() {
+    guard let status = manager?.connection.status else { return }
+    if status == .connected {
+      startingVPN = false
+    } else if startingVPN && vpnStatus == .connecting && (status == .disconnected || status == .invalid) {
+      startingVPN = false
+      error = "VPN не подключился. Проверьте профиль и установленные базы правил."
+    }
+    vpnStatus = status
+  }
+
+  private func vpnManager() async throws -> NETunnelProviderManager {
+    guard let bundleID = Bundle.main.bundleIdentifier else { throw CoreError.invalidResult }
+    let providerID = bundleID + ".PacketTunnel"
+    let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+    if let installed = managers.first(where: {
+      ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerID
+    }) { return installed }
+    let configuration = NETunnelProviderProtocol()
+    configuration.providerBundleIdentifier = providerID
+    configuration.serverAddress = "HyRoute"
+    let newManager = NETunnelProviderManager()
+    newManager.protocolConfiguration = configuration
+    newManager.localizedDescription = "HyRoute"
+    return newManager
   }
 
   func importSubscription(_ input: String, reportError: Bool = true) async -> Bool {

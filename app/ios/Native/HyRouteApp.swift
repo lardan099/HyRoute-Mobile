@@ -1,3 +1,4 @@
+import NetworkExtension
 import SwiftUI
 
 @main
@@ -43,6 +44,9 @@ private struct RootView: View {
     }
     .tint(colorScheme == .dark ? Color(red: 0.49, green: 0.88, blue: 0.73) : Color(red: 0.03, green: 0.39, blue: 0.31))
     .task { if !client.ready { await client.load() } }
+    .onReceive(NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)) { _ in
+      client.syncVPNStatus()
+    }
     .alert("HyRoute", isPresented: Binding(
       get: { client.error != nil },
       set: { if !$0 { client.error = nil } }
@@ -62,7 +66,7 @@ private struct Dashboard: View {
 
   var body: some View {
     List {
-      ConnectionStatus()
+      ConnectionStatus(client: client)
         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
         .listRowBackground(Color.clear)
       Section("Основной профиль") {
@@ -100,6 +104,22 @@ private struct Dashboard: View {
 }
 
 private struct ConnectionStatus: View {
+  @ObservedObject var client: Client
+
+  private var isActive: Bool {
+    [.connected, .connecting, .reasserting].contains(client.vpnStatus)
+  }
+
+  private var statusLabel: String {
+    if client.vpnBusy { return "Запуск VPN…" }
+    switch client.vpnStatus {
+    case .connected: return "VPN включён"
+    case .connecting, .reasserting: return "Подключение…"
+    case .disconnecting: return "Отключение…"
+    default: return "VPN выключен"
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Image(systemName: "power")
@@ -109,9 +129,16 @@ private struct ConnectionStatus: View {
         .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 4) {
-        Text("VPN выключен").font(.title2.weight(.semibold))
-        Text("Туннель ещё в разработке").font(.subheadline).foregroundStyle(.white.opacity(0.74))
+        Text(statusLabel).font(.title2.weight(.semibold))
+        if client.state.selected == nil && !isActive {
+          Text("Добавьте подписку, чтобы подключиться.")
+            .font(.subheadline).foregroundStyle(.white.opacity(0.74))
+        }
       }
+      Button(isActive ? "Отключить" : "Подключить") { Task { await client.toggleVPN() } }
+        .buttonStyle(.borderedProminent)
+        .tint(Color(red: 0.08, green: 0.40, blue: 0.32))
+        .disabled(client.vpnBusy || client.vpnStatus == .disconnecting || (client.state.selected == nil && !isActive))
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(20)
@@ -120,7 +147,6 @@ private struct ConnectionStatus: View {
       LinearGradient(colors: [Color(red: 0.07, green: 0.20, blue: 0.17), Color(red: 0.07, green: 0.12, blue: 0.13)], startPoint: .topTrailing, endPoint: .bottomLeading),
       in: RoundedRectangle(cornerRadius: 23)
     )
-    .accessibilityElement(children: .combine)
   }
 }
 

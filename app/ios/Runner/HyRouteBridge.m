@@ -39,3 +39,19 @@ BOOL HyRouteUpdateGeo(void) {
     NSError *error = nil;
     return MobileUpdateGeo(&error);
 }
+
+NSObject * _Nullable HyRoutePrepareVPN(NSString *state, NSString *geoDirectory) {
+    MobileConfigureGeo(geoDirectory);
+    NSError *error = nil;
+    MobileVPNPlan *plan = MobileNewVPNPlan(state, NO, &error);
+    return error == nil ? [plan prepare:&error] : nil;
+}
+
+NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd) {
+    NSError *error = nil;
+    return [(MobileVPNPrepared *)prepared start:fd platformImpl:nil error:&error];
+}
+
+void HyRouteStopVPN(NSObject *session) {
+    [(MobileVPNSession *)session stop];
+}

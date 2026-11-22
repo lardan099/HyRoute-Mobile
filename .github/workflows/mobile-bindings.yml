@@ -143,6 +143,9 @@ jobs:
           version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$bundle/Info.plist")"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           xcrun lipo "$bundle/HyRoute" -verify_arch arm64
+          extension="$bundle/PlugIns/HyRouteTunnel.appex"
+          xcrun lipo "$extension/HyRouteTunnel" -verify_arch arm64
+          /usr/libexec/PlistBuddy -c 'Print NSExtension:NSExtensionPointIdentifier' "$extension/Info.plist" | grep -Fx com.apple.networkextension.packet-tunnel
           test ! -d "$bundle/Frameworks/Flutter.framework"
           work="$(mktemp -d)"
           mkdir "$work/Payload"
@@ -168,7 +171,7 @@ jobs:
           xcodebuild -project HyRoute.xcodeproj -target HyRoute -configuration Debug \
             -sdk iphonesimulator ARCHS="$(uname -m)" CONFIGURATION_BUILD_DIR="$output" CODE_SIGNING_ALLOWED=NO -quiet
           bundle="$output/HyRoute.app"
-          codesign --force --sign - "$bundle"
+          codesign --force --deep --sign - "$bundle"
           xcrun simctl bootstatus "$device" -b
           xcrun simctl ui "$device" appearance dark
           xcrun simctl install "$device" "$bundle"
