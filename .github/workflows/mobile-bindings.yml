@@ -30,7 +30,7 @@ jobs:
         platform: ${{ fromJSON(inputs.platform == 'iOS' && '["iOS"]' || inputs.platform == 'Android' && '["Android"]' || '["Android", "iOS"]') }}
     env:
       MOBILE_TOOLS_VERSION: v0.0.0-20261117202452-47699113848a
-      MOBILE_TARGET: ${{ matrix.platform == 'iOS' && 'ios' || 'android/arm64,android/amd64' }}
+      MOBILE_TARGET: ${{ matrix.platform == 'iOS' && 'ios,iossimulator' || 'android/arm64,android/amd64' }}
       MOBILE_OUTPUT: ${{ matrix.platform == 'iOS' && 'HyRouteCore.xcframework' || 'HyRouteCore.aar' }}
       FLUTTER_VERSION: '3.44.0'
       FLUTTER_REVISION: 559ffa3f75e7402d65a8def9c28389a9b2e6fe42
@@ -84,7 +84,7 @@ jobs:
             dist/HyRouteAndroidRouting.jar
           if-no-files-found: error
       - name: Install Flutter
-        if: inputs.build_apps
+        if: inputs.build_apps && matrix.platform == 'Android'
         shell: bash
         run: |
           flutter_sdk="$RUNNER_TEMP/flutter"
@@ -92,7 +92,7 @@ jobs:
           test "$(git -C "$flutter_sdk" rev-parse HEAD)" = "$FLUTTER_REVISION"
           printf '%s\n' "$flutter_sdk/bin" >> "$GITHUB_PATH"
       - name: Test Flutter client
-        if: inputs.build_apps
+        if: inputs.build_apps && matrix.platform == 'Android'
         working-directory: app
         shell: bash
         run: |
@@ -106,19 +106,30 @@ jobs:
         run: |
           flutter --suppress-analytics build apk --debug --no-pub --target-platform android-arm64,android-x64
           cp build/app/outputs/flutter-apk/app-debug.apk ../dist/HyRoute-Android-debug.apk
-      - name: Build unsigned iPhone IPA
+      - name: Check SwiftUI state compatibility
         if: inputs.build_apps && matrix.platform == 'iOS'
-        working-directory: app
+        working-directory: app/ios
         shell: bash
         run: |
-          flutter --suppress-analytics build ios --release --no-codesign --no-pub
-          bundle=build/ios/iphoneos/Runner.app
+          swiftc -o "$RUNNER_TEMP/hyroute-state-test" Native/Models.swift NativeTests/StateCompatibility.swift
+          "$RUNNER_TEMP/hyroute-state-test"
+      - name: Build unsigned iPhone IPA
+        if: inputs.build_apps && matrix.platform == 'iOS'
+        working-directory: app/ios
+        shell: bash
+        run: |
+          output="$RUNNER_TEMP/hyroute-iphoneos"
+          xcodebuild -project HyRoute.xcodeproj -target HyRoute -configuration Release \
+            -sdk iphoneos CONFIGURATION_BUILD_DIR="$output" CODE_SIGNING_ALLOWED=NO -quiet
+          bundle="$output/HyRoute.app"
           /usr/libexec/PlistBuddy -c 'Print CFBundleSupportedPlatforms:0' "$bundle/Info.plist" | grep -Fx iPhoneOS
-          xcrun lipo "$bundle/Runner" -verify_arch arm64
+          /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$bundle/Info.plist" | grep -Fx io.hyroute.hyrouteMobile
+          xcrun lipo "$bundle/HyRoute" -verify_arch arm64
+          test ! -d "$bundle/Frameworks/Flutter.framework"
           work="$(mktemp -d)"
           mkdir "$work/Payload"
-          ditto "$bundle" "$work/Payload/Runner.app"
-          ditto -c -k --keepParent "$work/Payload" ../dist/HyRoute-iOS-unsigned.ipa
+          ditto "$bundle" "$work/Payload/HyRoute.app"
+          ditto -c -k --keepParent "$work/Payload" ../../dist/HyRoute-iOS-unsigned.ipa
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: inputs.build_apps
         with:
@@ -126,4 +137,30 @@ jobs:
           path: |
             dist/HyRoute-Android-debug.apk
             dist/HyRoute-iOS-unsigned.ipa
+          if-no-files-found: error
+      - name: Open SwiftUI on an iPhone simulator
+        if: inputs.build_apps && matrix.platform == 'iOS'
+        working-directory: app/ios
+        shell: bash
+        run: |
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for runtime in sorted(devices,reverse=True) for d in devices[runtime] if d["name"].startswith("iPhone")))')"
+          output="$RUNNER_TEMP/hyroute-iphonesimulator"
+          xcodebuild -project HyRoute.xcodeproj -target HyRoute -configuration Debug \
+            -sdk iphonesimulator ARCHS="$(uname -m)" CONFIGURATION_BUILD_DIR="$output" CODE_SIGNING_ALLOWED=NO -quiet
+          bundle="$output/HyRoute.app"
+          codesign --force --sign - "$bundle"
+          xcrun simctl boot "$device"
+          trap 'xcrun simctl shutdown "$device"' EXIT
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl status_bar "$device" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState unplugged --batteryLevel 100
+          xcrun simctl ui "$device" appearance dark
+          xcrun simctl install "$device" "$bundle"
+          xcrun simctl launch "$device" io.hyroute.hyrouteMobile
+          sleep 3
+          xcrun simctl io "$device" screenshot ../../dist/HyRoute-iOS-preview.png
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: inputs.build_apps && matrix.platform == 'iOS'
+        with:
+          name: HyRoute-iOS-preview
+          path: dist/HyRoute-iOS-preview.png
           if-no-files-found: error
