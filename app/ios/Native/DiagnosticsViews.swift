@@ -6,6 +6,7 @@ private enum ProbeError: Error { case unavailable }
 
 struct ProbeSnapshot: Decodable {
   struct Row: Decodable {
+    let profileId: String
     let name: String
     let host: String?
     let status: String
@@ -39,6 +40,9 @@ final class ProbeHandle {
   private let journal: String
   private let session: NETunnelProviderSession?
   private var localProbe: NSObject?
+  #if targetEnvironment(simulator)
+  var simulatorResult: ProbeSnapshot?
+  #endif
 
   init(snapshot: String, scope: String, id: String, journal: String, session: NETunnelProviderSession?) {
     self.snapshot = snapshot
@@ -49,6 +53,9 @@ final class ProbeHandle {
   }
 
   func start() async throws -> ProbeSnapshot {
+    #if targetEnvironment(simulator)
+    if let simulatorResult { return simulatorResult }
+    #endif
     if let session {
       let data = try await send(ProbeCommand(action: .start, token: token, scope: scope, id: id, state: snapshot), to: session)
       return try JSONDecoder().decode(ProbeSnapshot.self, from: data)
@@ -153,94 +160,5 @@ struct VPNJournalPage: View {
       failed = true
     }
     loading = false
-  }
-}
-
-struct ProbePage: View {
-  @ObservedObject var client: Client
-  let scope: String
-  let id: String
-  @State private var run = 0
-  @State private var snapshot: ProbeSnapshot?
-  @State private var running = true
-  @State private var failed = false
-
-  var body: some View {
-    let results = snapshot?.results ?? []
-    ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        if running {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("Проверяем задержку").font(.subheadline.weight(.semibold)).foregroundStyle(HyStyle.ink)
-            if results.isEmpty { ProgressView().tint(HyStyle.accent) }
-            else {
-              let complete = results.filter { $0.status != "pending" && $0.status != "running" }.count
-              ProgressView(value: Double(complete), total: Double(results.count)).tint(HyStyle.accent)
-            }
-          }
-          .hyCard()
-        }
-        if failed { Text("Не удалось проверить выбранные серверы").foregroundStyle(HyStyle.failure).hyCard() }
-        if !results.isEmpty {
-          LazyVStack(spacing: 0) {
-            ForEach(results.indices, id: \.self) { index in
-              let row = results[index]
-              HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Text(row.name).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink).lineLimit(2)
-                  if let host = row.host { Text(host).font(.subheadline).foregroundStyle(HyStyle.muted).lineLimit(1) }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text(row.label)
-                  .font(.caption.monospacedDigit().weight(.semibold))
-                  .foregroundStyle(row.status == "ok" ? HyStyle.success : HyStyle.muted)
-                  .multilineTextAlignment(.trailing)
-                  .padding(.horizontal, 8).padding(.vertical, 6)
-                  .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 7))
-              }
-              .padding(12)
-              if index < results.count - 1 { Divider().overlay(HyStyle.stroke).padding(.horizontal, 12) }
-            }
-          }
-          .hyCard(padding: 0)
-        }
-        Text("HTTPS-запрос через каждый сервер").font(.footnote).foregroundStyle(HyStyle.muted)
-      }
-      .padding(16)
-    }
-    .hyScreen()
-    .navigationTitle("Задержка серверов")
-    .navigationBarTitleDisplayMode(.inline)
-    .task(id: run) { await measure() }
-    .toolbar {
-      Button { run += 1 } label: { Label("Повторить замер", systemImage: "arrow.clockwise") }
-        .disabled(running)
-    }
-  }
-
-  private func measure() async {
-    running = true
-    failed = false
-    snapshot = nil
-    defer { running = false }
-    do {
-      let probe = try await client.probeHandle(scope: scope, id: id)
-      do {
-        try Task.checkCancellation()
-        var current = try await probe.start()
-        while !Task.isCancelled {
-          snapshot = current
-          if current.done { break }
-          try await Task.sleep(for: .milliseconds(400))
-          current = try await probe.status()
-        }
-      } catch {
-        await probe.cancel()
-        throw error
-      }
-      await probe.cancel()
-    } catch {
-      if !Task.isCancelled { failed = true }
-    }
   }
 }

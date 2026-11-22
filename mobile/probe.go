@@ -22,10 +22,11 @@ type probeTarget struct {
 }
 
 type probeResult struct {
-	Name   string `json:"name"`
-	Host   string `json:"host,omitempty"`
-	Status string `json:"status"`
-	Millis int64  `json:"ms,omitempty"`
+	ProfileID string `json:"profileId"`
+	Name      string `json:"name"`
+	Host      string `json:"host,omitempty"`
+	Status    string `json:"status"`
+	Millis    int64  `json:"ms,omitempty"`
 }
 
 // ProbeBatch runs a bounded number of independent HTTPS checks and publishes
@@ -62,13 +63,13 @@ func startProbe(raw, scope, id, journal, targetURL string) (*ProbeBatch, error) 
 			}
 			if profile.Balance == nil {
 				targets = append(targets, probeTarget{profile: profile})
-				results = append(results, probeResult{Name: profile.Name, Host: profile.Host, Status: "pending"})
+				results = append(results, probeResult{ProfileID: profile.ID, Name: profile.Name, Host: profile.Host, Status: "pending"})
 				continue
 			}
 			for i := range profile.Balance.Nodes {
 				node := &profile.Balance.Nodes[i]
 				targets = append(targets, probeTarget{node: node})
-				results = append(results, probeResult{Name: fmt.Sprintf("%s · узел %d", profile.Name, i+1), Host: node.Host, Status: "pending"})
+				results = append(results, probeResult{ProfileID: profile.ID, Name: fmt.Sprintf("%s · узел %d", profile.Name, i+1), Host: node.Host, Status: "pending"})
 			}
 		}
 	}

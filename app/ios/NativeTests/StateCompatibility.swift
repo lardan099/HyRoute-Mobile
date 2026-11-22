@@ -31,6 +31,10 @@ struct StateCompatibility {
     var broken = state.settings.routing
     broken.viaProfiles["old"] = "auto"
     precondition(broken.unavailableChainExits(available: ["auto"]) == ["auto", "old"])
+    broken.rules[0].profile = "old"
+    precondition(broken.unavailableRuleIndices(available: ["auto", "server"]) == [0])
+    broken.rules[0].enabled = false
+    precondition(broken.unavailableRuleIndices(available: ["auto", "server"]).isEmpty)
     precondition(state.profileTitle("server") == "Netherlands")
     precondition(state.profileTitle("old") == "Удалённый профиль")
     let blank = try JSONDecoder().decode(ClientState.self, from: Data(#"{"subscriptions":[],"settings":{}}"#.utf8))

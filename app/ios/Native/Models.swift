@@ -83,6 +83,12 @@ struct RouteRule: Codable {
   var ports: String?
   var `protocol`: String?
   var profile: String?
+  var enabled: Bool?
+
+  func hasUnavailableProfile(available: Set<String>) -> Bool {
+    guard enabled != false, action == .tunnel, let profile, !profile.isEmpty else { return false }
+    return !available.contains(profile)
+  }
 
   var title: String {
     var parts = domains ?? []
@@ -104,6 +110,10 @@ struct Routing: Codable {
       guard let entry = viaProfiles[exit] else { return false }
       return !available.contains(exit) || !available.contains(entry)
     }.sorted()
+  }
+
+  func unavailableRuleIndices(available: Set<String>) -> [Int] {
+    rules.indices.filter { rules[$0].hasUnavailableProfile(available: available) }
   }
 
   init(from decoder: Decoder) throws {

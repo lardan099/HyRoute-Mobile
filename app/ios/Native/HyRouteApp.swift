@@ -57,7 +57,7 @@ private struct RootView: View {
               SubscriptionsPage(client: client)
             }
           }
-          panel(.rules) { RulesPage(client: client) }
+          panel(.rules) { RulesPage(client: client, preview: previewScreen) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { tabBar }
       } else if client.busy {
@@ -77,7 +77,7 @@ private struct RootView: View {
       #if targetEnvironment(simulator)
       if let previewScreen, client.loadLayoutPreview() {
         if previewScreen == "servers" { tab = .subscriptions }
-        if previewScreen == "rules" { tab = .rules }
+        if ["rules", "routing", "chains"].contains(previewScreen) { tab = .rules }
         return
       }
       #endif
@@ -120,6 +120,7 @@ private struct RootView: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("tab-\(item)")
         .accessibilityAddTraits(tab == item ? .isSelected : [])
       }
     }
@@ -327,6 +328,7 @@ private struct SubscriptionsPage: View {
               .hyCard(padding: 12)
           }
           .buttonStyle(.plain)
+          .accessibilityIdentifier("subscription-\(item.id)")
         }
       }
       .padding(16)
@@ -345,7 +347,8 @@ private struct SubscriptionsPage: View {
   }
 }
 
-private struct SubscriptionProbe: Hashable {
+private struct SubscriptionProbe {
+  let token = UUID()
   let scope: String
   let id: String
 }
@@ -353,17 +356,26 @@ private struct SubscriptionProbe: Hashable {
 private struct SubscriptionPage: View {
   @ObservedObject var client: Client
   let id: String
+  @State private var measurement: SubscriptionProbe?
+  @State private var results: [String: [ProbeSnapshot.Row]] = [:]
+  @State private var expandedGroups: Set<String> = []
+  @State private var measurementError = false
 
   var body: some View {
     if let item = client.state.subscriptions.first(where: { $0.id == id }) {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
           HStack(spacing: 10) {
-            NavigationLink(value: SubscriptionProbe(scope: "subscription", id: id)) {
-              Label("Проверить все", systemImage: "speedometer")
+            Button {
+              if measurement != nil { cancelMeasurement() }
+              else { startMeasurement(scope: "subscription", id: id) }
+            } label: {
+              Label(measurement == nil ? "Проверить все" : "Остановить",
+                    systemImage: measurement == nil ? "speedometer" : "stop.circle")
             }
             .buttonStyle(HyButton())
-            .disabled(!item.servers.contains { $0.missing != true })
+            .accessibilityIdentifier("subscription-check-all")
+            .disabled(measurement == nil && !item.servers.contains { $0.missing != true })
             if item.canRefresh == true {
               Button { Task { await client.refresh(id) } } label: {
                 Group {
@@ -377,33 +389,16 @@ private struct SubscriptionPage: View {
               }
               .buttonStyle(.plain)
               .accessibilityLabel("Обновить подписку")
-              .disabled(client.busy)
+              .disabled(client.busy || measurement != nil)
             }
+          }
+          if measurementError {
+            Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
+              .accessibilityIdentifier("subscription-probe-error")
           }
           LazyVStack(spacing: 0) {
             ForEach(item.servers) { profile in
-              HStack(spacing: 6) {
-                Button { Task { _ = await client.select(profile.id) } } label: {
-                  ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
-                }
-                .buttonStyle(.plain)
-                .disabled(client.busy || profile.missing == true)
-                if profile.missing != true {
-                  NavigationLink(value: SubscriptionProbe(scope: "profile", id: profile.id)) {
-                    Image(systemName: "speedometer")
-                      .font(.body.weight(.semibold))
-                      .foregroundStyle(HyStyle.accent)
-                      .frame(width: 44, height: 44)
-                      .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
-                      .contentShape(Rectangle())
-                  }
-                  .buttonStyle(.plain)
-                  .fixedSize(horizontal: true, vertical: false)
-                  .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
-                }
-              }
-              .padding(.horizontal, 12)
-              .padding(.vertical, 8)
+              serverRow(profile)
               if profile.id != item.servers.last?.id {
                 Divider().overlay(HyStyle.stroke).padding(.leading, 60)
               }
@@ -416,9 +411,108 @@ private struct SubscriptionPage: View {
       .hyScreen()
       .navigationTitle(item.name)
       .navigationBarTitleDisplayMode(.inline)
-      .navigationDestination(for: SubscriptionProbe.self) { probe in
-        ProbePage(client: client, scope: probe.scope, id: probe.id)
+      .task(id: measurement?.token) {
+        if let measurement { await measure(measurement) }
       }
+    }
+  }
+
+  private func serverRow(_ profile: VPNProfile) -> some View {
+    let rows = results[profile.id] ?? []
+    return VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 6) {
+        Button { Task { _ = await client.select(profile.id) } } label: {
+          ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
+        }
+        .buttonStyle(.plain)
+        .disabled(client.busy || profile.missing == true)
+        if profile.missing != true {
+          Button { startMeasurement(scope: "profile", id: profile.id) } label: {
+            Image(systemName: "speedometer")
+              .font(.body.weight(.semibold))
+              .foregroundStyle(HyStyle.accent)
+              .frame(width: 44, height: 44)
+              .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .disabled(measurement != nil)
+          .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
+          .accessibilityIdentifier("subscription-check-\(profile.id)")
+        }
+      }
+      if profile.balance == true && !rows.isEmpty {
+        DisclosureGroup(isExpanded: Binding(get: { expandedGroups.contains(profile.id) }, set: { expanded in
+          if expanded { expandedGroups.insert(profile.id) } else { expandedGroups.remove(profile.id) }
+        })) {
+          ForEach(rows.indices, id: \.self) { index in
+            HStack {
+              Text(rows[index].host ?? "Узел \(index + 1)").lineLimit(1)
+              Spacer(minLength: 6)
+              Text(rows[index].label).monospacedDigit()
+                .foregroundStyle(rows[index].ms == nil ? HyStyle.muted : HyStyle.success)
+            }
+            .padding(.vertical, 4)
+          }
+        } label: {
+          Text(groupResult(rows)).accessibilityIdentifier("subscription-result-\(profile.id)")
+        }
+        .font(.subheadline)
+        .foregroundStyle(HyStyle.muted)
+        .padding(.leading, 48)
+      } else if let row = rows.first {
+        Text(row.label).font(.subheadline.monospacedDigit())
+          .foregroundStyle(row.ms == nil ? HyStyle.muted : HyStyle.success)
+          .padding(.leading, 48)
+          .accessibilityIdentifier("subscription-result-\(profile.id)")
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+  }
+
+  private func groupResult(_ rows: [ProbeSnapshot.Row]) -> String {
+    if rows.contains(where: { $0.status == "running" || $0.status == "pending" }) { return "Проверка узлов…" }
+    let values = rows.compactMap(\.ms)
+    if let best = values.min() { return "\(values.count) из \(rows.count) · от \(best) мс" }
+    return "Узлы не ответили"
+  }
+
+  private func startMeasurement(scope: String, id: String) {
+    measurementError = false
+    if scope == "subscription" { results.removeAll() }
+    else {
+      results.removeValue(forKey: id)
+      expandedGroups.insert(id)
+    }
+    measurement = SubscriptionProbe(scope: scope, id: id)
+  }
+
+  private func cancelMeasurement() {
+    measurement = nil
+    results = results.mapValues { $0.filter { $0.status != "pending" && $0.status != "running" } }
+  }
+
+  private func measure(_ request: SubscriptionProbe) async {
+    defer { if measurement?.token == request.token { measurement = nil } }
+    do {
+      let handle = try await client.probeHandle(scope: request.scope, id: request.id)
+      do {
+        try Task.checkCancellation()
+        var current = try await handle.start()
+        while !Task.isCancelled && measurement?.token == request.token {
+          results.merge(Dictionary(grouping: current.results, by: \.profileId)) { _, updated in updated }
+          if current.done { break }
+          try await Task.sleep(for: .milliseconds(400))
+          current = try await handle.status()
+        }
+      } catch {
+        await handle.cancel()
+        throw error
+      }
+      await handle.cancel()
+    } catch {
+      if !Task.isCancelled && measurement?.token == request.token { measurementError = true }
     }
   }
 }

@@ -71,6 +71,13 @@ func TestProbeChecksEachGroupMemberAndSingleProfile(t *testing.T) {
 		if tc.count > 1 && result.Results[tc.count-1].Status != "configuration" {
 			t.Fatalf("a bad node affected the results for %s: %+v", tc.id, result)
 		}
+		wantFirst := "member"
+		if tc.id == "group" {
+			wantFirst = "group"
+		}
+		if result.Results[0].ProfileID != wantFirst || (tc.count > 1 && result.Results[tc.count-1].ProfileID != "group") {
+			t.Fatalf("results cannot be attached to the correct profile: %+v", result.Results)
+		}
 	}
 	if log := VPNJournal(journal, ""); strings.Contains(log, credential) || strings.Contains(log, single.Host) || !strings.Contains(log, journalMessages["probe_done"]) {
 		t.Fatalf("unexpected journal: %s", log)

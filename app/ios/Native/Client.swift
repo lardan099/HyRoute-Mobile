@@ -151,6 +151,21 @@ final class Client: ObservableObject {
   func journal() async throws -> [String] { try await core.journal() }
 
   func probeHandle(scope: String, id: String) async throws -> ProbeHandle {
+    #if targetEnvironment(simulator)
+    if ProcessInfo.processInfo.environment["HYROUTE_UI_TEST"] == "1" {
+      let profiles = scope == "profile" ? state.profiles.filter { $0.id == id } :
+        state.subscriptions.first { $0.id == id }?.servers.filter { $0.missing != true } ?? []
+      let handle = ProbeHandle(snapshot: "", scope: scope, id: id, journal: "", session: nil)
+      let rows = profiles.flatMap { profile in
+        (0..<(profile.balance == true ? 2 : 1)).map { index in
+          ProbeSnapshot.Row(profileId: profile.id, name: profile.title, host: "node\(index + 1).example.test",
+                            status: "ok", ms: (scope == "profile" ? 33 : 42) + index)
+        }
+      }
+      handle.simulatorResult = ProbeSnapshot(done: true, results: rows)
+      return handle
+    }
+    #endif
     let snapshot = try await core.vpnState()
     let journal = try await core.journalPath()
     let session = vpnStatus == .connected ? manager?.connection as? NETunnelProviderSession : nil
@@ -250,12 +265,19 @@ final class Client: ObservableObject {
         {"id":"fi","name":"🇫🇮 Хельсинки · Северный узел | Hysteria 2","protocol":"hysteria2"},
         {"id":"nl","name":"🇳🇱 Амстердам · Резервный сервер | VLESS","protocol":"vless"},
         {"id":"jp","name":"🇯🇵 Токио · Восточная Азия | Hysteria 2","protocol":"hysteria2"},
-        {"id":"de","name":"🇩🇪 Франкфурт · Основной европейский сервер | VLESS","protocol":"vless"}
+        {"id":"de","name":"🇩🇪 Франкфурт · Основной европейский сервер | VLESS","protocol":"vless"},
+        {"id":"old","name":"Старый сервер","protocol":"vless","missing":true}
       ]}],
       "settings":{"selected":"auto","routing":{"defaultAction":"tunnel","rules":[
         {"action":"direct","domains":["geosite:ru"]},
-        {"action":"block","domains":["geosite:category-ads-all"]}
-      ]}}
+        {"action":"block","domains":["geosite:category-ads-all"]},
+        {"action":"tunnel","domains":["geosite:telegram"],"profile":"old"},
+        {"action":"tunnel","domains":["geosite:discord"],"profile":"fi"},
+        {"action":"tunnel","domains":["geosite:youtube"]},
+        {"action":"direct","domains":["geoip:private"]},
+        {"action":"tunnel","domains":["example.test"]},
+        {"action":"direct","domains":["example.org"]}
+      ],"viaProfiles":{"auto":"old","fi":"jp"}}}
     }
     """
     guard let preview = try? JSONDecoder().decode(ClientState.self, from: Data(fixture.utf8)) else { return false }
