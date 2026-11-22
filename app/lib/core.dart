@@ -14,7 +14,14 @@ abstract interface class ClientCore {
   Future<Map<String, String>> launchableApps();
 }
 
-class PlatformCore implements ClientCore {
+abstract interface class VPNControl {
+  bool get vpnAvailable;
+  Future<String> vpnStatus();
+  Future<void> startVpn();
+  Future<void> stopVpn();
+}
+
+class PlatformCore implements ClientCore, VPNControl {
   const PlatformCore();
 
   static const _channel = MethodChannel('io.hyroute/core');
@@ -22,6 +29,19 @@ class PlatformCore implements ClientCore {
   @override
   bool get supportsAndroidRules =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  @override
+  bool get vpnAvailable => supportsAndroidRules;
+
+  @override
+  Future<String> vpnStatus() async =>
+      await _channel.invokeMethod<String>('vpnStatus') ?? 'off';
+
+  @override
+  Future<void> startVpn() => _channel.invokeMethod<void>('startVpn');
+
+  @override
+  Future<void> stopVpn() => _channel.invokeMethod<void>('stopVpn');
 
   @override
   Future<ClientState> loadState() async {

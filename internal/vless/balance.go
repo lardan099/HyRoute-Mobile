@@ -90,25 +90,43 @@ func (b Balance) StrategyName() string {
 // addresses are pinned so the engine can exclude exactly what Xray dials.
 // An invalid address marks a node whose DNS lookup failed this time.
 func BalanceConfig(b Balance, ips []netip.Addr, r Run) ([]byte, error) {
-	if err := b.Validate(); err != nil {
-		return nil, err
-	}
-	if len(ips) != len(b.Nodes) {
-		return nil, errors.New("не совпадают адреса и узлы балансировщика")
-	}
 	cfg, err := clientConfig(r, b.BlockBitTorrent)
 	if err != nil {
 		return nil, err
 	}
 	const prefix = "balanced-"
+	outbounds, balancer, err := BalanceOutbounds(b, ips, prefix, "balance")
+	if err != nil {
+		return nil, err
+	}
+	var rules []any
+	if b.BlockBitTorrent {
+		outbounds = append(outbounds, map[string]any{"tag": "block", "protocol": "blackhole"})
+		rules = append(rules, map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"})
+	}
+	rules = append(rules, map[string]any{"type": "field", "network": "tcp,udp", "balancerTag": "balance"})
+	cfg["outbounds"] = outbounds
+	cfg["routing"] = map[string]any{"rules": rules, "balancers": []any{balancer}}
+	cfg["burstObservatory"] = b.Observatory([]string{prefix})
+	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// BalanceOutbounds builds tagged transports and the associated Xray balancer.
+func BalanceOutbounds(b Balance, ips []netip.Addr, prefix, tag string) ([]any, map[string]any, error) {
+	if err := b.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if len(ips) != len(b.Nodes) {
+		return nil, nil, errors.New("не совпадают адреса и узлы балансировщика")
+	}
 	var outbounds []any
 	for i, n := range b.Nodes {
 		if !ips[i].IsValid() {
 			continue
 		}
-		out, err := outbound(n.Settings, Run{Host: n.Host, Port: n.Port, Dial: ips[i]}, prefix+strconv.Itoa(i))
+		out, err := Outbound(n.Settings, Run{Host: n.Host, Port: n.Port, Dial: ips[i]}, prefix+strconv.Itoa(i))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if n.Fragment != (TCPFragment{}) {
 			out["streamSettings"].(map[string]any)["finalmask"] = map[string]any{
@@ -118,20 +136,14 @@ func BalanceConfig(b Balance, ips []netip.Addr, r Run) ([]byte, error) {
 		outbounds = append(outbounds, out)
 	}
 	if len(outbounds) == 0 {
-		return nil, errors.New("ни один адрес балансировщика не разрешился")
+		return nil, nil, errors.New("ни один адрес балансировщика не разрешился")
 	}
-	var rules []any
-	if b.BlockBitTorrent {
-		outbounds = append(outbounds, map[string]any{"tag": "block", "protocol": "blackhole"})
-		rules = append(rules, map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"})
-	}
-	rules = append(rules, map[string]any{"type": "field", "network": "tcp,udp", "balancerTag": "balance"})
 	strategy := map[string]any{"expected": b.Expected, "tolerance": b.Tolerance}
 	if b.MaxRTT != 0 {
 		strategy["maxRTT"] = b.MaxRTT.String()
 	}
 	balancer := map[string]any{
-		"tag": "balance", "selector": []string{prefix},
+		"tag": tag, "selector": []string{prefix},
 		"strategy": map[string]any{"type": b.StrategyName()},
 	}
 	if b.StrategyName() == "leastLoad" {
@@ -140,6 +152,11 @@ func BalanceConfig(b Balance, ips []netip.Addr, r Run) ([]byte, error) {
 	if b.FallbackNode > 0 && ips[b.FallbackNode-1].IsValid() {
 		balancer["fallbackTag"] = prefix + strconv.Itoa(b.FallbackNode-1)
 	}
+	return outbounds, balancer, nil
+}
+
+// Observatory configures probes for all supplied outbound tag prefixes.
+func (b Balance) Observatory(prefixes []string) map[string]any {
 	interval, timeout, samples := b.ProbeInterval, b.ProbeTimeout, b.ProbeSamples
 	if interval == 0 {
 		interval = 30 * time.Second
@@ -150,16 +167,11 @@ func BalanceConfig(b Balance, ips []netip.Addr, r Run) ([]byte, error) {
 	if samples == 0 {
 		samples = 1
 	}
-	cfg["outbounds"] = outbounds
-	cfg["routing"] = map[string]any{
-		"rules": rules, "balancers": []any{balancer},
-	}
-	cfg["burstObservatory"] = map[string]any{
-		"subjectSelector": []string{prefix},
+	return map[string]any{
+		"subjectSelector": prefixes,
 		"pingConfig": map[string]any{
 			"destination": "https://connectivitycheck.gstatic.com/generate_204",
 			"interval":    interval.String(), "timeout": timeout.String(), "sampling": samples,
 		},
 	}
-	return json.MarshalIndent(cfg, "", "  ")
 }

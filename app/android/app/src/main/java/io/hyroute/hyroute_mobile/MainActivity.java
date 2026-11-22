@@ -3,6 +3,8 @@ package io.hyroute.hyroute_mobile;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.net.VpnService;
+import android.os.Build;
 import java.io.File;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -18,6 +20,7 @@ import io.flutter.plugin.common.StandardMethodCodec;
 import mobile.Mobile;
 
 public class MainActivity extends FlutterActivity {
+    private static final int VPN_PERMISSION = 600;
     private MethodChannel coreChannel;
 
     @Override
@@ -73,6 +76,22 @@ public class MainActivity extends FlutterActivity {
                 case "launchableApps":
                     result.success(launchableApps());
                     break;
+                case "vpnStatus":
+                    result.success(HyRouteVpnService.status());
+                    break;
+                case "startVpn":
+                    runOnUiThread(() -> {
+                        requestVpn();
+                        result.success(null);
+                    });
+                    break;
+                case "stopVpn":
+                    runOnUiThread(() -> {
+                        HyRouteVpnService.stopping();
+                        stopService(new Intent(this, HyRouteVpnService.class));
+                        result.success(null);
+                    });
+                    break;
                 default:
                     result.notImplemented();
             }
@@ -81,6 +100,39 @@ public class MainActivity extends FlutterActivity {
         } catch (Exception e) {
             result.error("core", null, null);
         }
+    }
+
+    private void requestVpn() {
+        if (!HyRouteVpnService.request()) return;
+        try {
+            Intent permission = VpnService.prepare(this);
+            if (permission == null) {
+                launchVpn();
+            } else {
+                startActivityForResult(permission, VPN_PERMISSION);
+            }
+        } catch (RuntimeException e) {
+            HyRouteVpnService.failed();
+        }
+    }
+
+    private void launchVpn() {
+        if (!HyRouteVpnService.starting()) return;
+        Intent service = new Intent(this, HyRouteVpnService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
+            else startService(service);
+        } catch (RuntimeException e) {
+            HyRouteVpnService.failed();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != VPN_PERMISSION) return;
+        if (resultCode == RESULT_OK) launchVpn();
+        else HyRouteVpnService.permissionDenied();
     }
 
     private Map<String, String> launchableApps() {

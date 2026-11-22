@@ -30,7 +30,7 @@ type Run struct {
 // one VLESS outbound, nothing else (no routing, DNS or geo files: HyRoute
 // decides what goes into the tunnel).
 func Config(s Settings, r Run) ([]byte, error) {
-	out, err := outbound(s, r, "proxy")
+	out, err := Outbound(s, r, "proxy")
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,8 @@ func Config(s Settings, r Run) ([]byte, error) {
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-func outbound(s Settings, r Run, tag string) (map[string]any, error) {
+// Outbound builds the transport without adding a listener.
+func Outbound(s Settings, r Run, tag string) (map[string]any, error) {
 	if err := s.ValidateFor(r.Host); err != nil {
 		return nil, err
 	}

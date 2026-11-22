@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -26,11 +28,61 @@ class _HomeState extends State<Home> {
   bool _validating = false;
   bool _loading = true;
   bool _storageFailed = false;
+  Timer? _vpnTimer;
+  var _vpnStatus = 'off';
+
+  VPNControl? get _vpn {
+    final core = widget.core;
+    return core is VPNControl && (core as VPNControl).vpnAvailable
+        ? core as VPNControl
+        : null;
+  }
 
   @override
   void initState() {
     super.initState();
     _loadState();
+    if (_vpn != null) {
+      _readVPNStatus();
+      _vpnTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _readVPNStatus(),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _vpnTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _readVPNStatus() async {
+    final vpn = _vpn;
+    if (vpn == null) return;
+    try {
+      final status = await vpn.vpnStatus();
+      if (mounted && status != _vpnStatus) setState(() => _vpnStatus = status);
+    } on PlatformException {
+      if (mounted) setState(() => _vpnStatus = 'error');
+    } on MissingPluginException {
+      if (mounted) setState(() => _vpnStatus = 'error');
+    }
+  }
+
+  Future<void> _toggleVPN() async {
+    final vpn = _vpn;
+    if (vpn == null) return;
+    try {
+      if (_vpnStatus == 'on' || _vpnStatus == 'starting') {
+        await vpn.stopVpn();
+      } else {
+        await vpn.startVpn();
+      }
+      await _readVPNStatus();
+    } on PlatformException {
+      if (mounted) setState(() => _vpnStatus = 'error');
+    }
   }
 
   Future<void> _loadState() async {
@@ -173,6 +225,9 @@ class _HomeState extends State<Home> {
             ClientState(subscriptions: _subscriptions, settings: next),
           ),
         );
+        if (_vpnStatus == 'on') {
+          _notify('Настройки сохранены. Они применятся после переподключения.');
+        }
       }
       return null;
     } on PlatformException catch (error) {
@@ -361,7 +416,12 @@ class _HomeState extends State<Home> {
         .where((server) => server.id == _selected)
         .firstOrNull;
     return [
-      const _ConnectionCard(),
+      _ConnectionCard(
+        status: _vpnStatus,
+        available: _vpn != null,
+        hasProfile: selected != null,
+        onToggle: _toggleVPN,
+      ),
       const _SectionTitle('Основной профиль'),
       Card(
         child: selected == null
@@ -571,10 +631,35 @@ class _HomeState extends State<Home> {
 }
 
 class _ConnectionCard extends StatelessWidget {
-  const _ConnectionCard();
+  const _ConnectionCard({
+    required this.status,
+    required this.available,
+    required this.hasProfile,
+    required this.onToggle,
+  });
+
+  final String status;
+  final bool available;
+  final bool hasProfile;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
+    final title = switch (status) {
+      'on' => 'VPN включён',
+      'starting' || 'permission' => 'Подключение VPN',
+      'stopping' => 'Отключение VPN',
+      'error' => 'Не удалось подключить VPN',
+      _ => 'VPN выключен',
+    };
+    final details = !available
+        ? 'Подключение доступно в мобильном приложении.'
+        : switch (status) {
+            'permission' => 'Разрешите подключение в системном окне.',
+            'error' => 'Проверьте профиль, правила и доступ к интернету.',
+            _ => hasProfile ? null : 'Выберите профиль, чтобы подключиться.',
+          };
+    final canStop = status == 'on' || status == 'starting';
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xff122522),
@@ -606,17 +691,27 @@ class _ConnectionCard extends StatelessWidget {
             ),
             const SizedBox(height: 18),
             Text(
-              'VPN выключен',
+              title,
               style: Theme.of(context).textTheme.headlineSmall!.copyWith(
                 color: Colors.white,
                 fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              'Туннель ещё в разработке',
-              style: TextStyle(color: Color(0xffc4d7ce)),
-            ),
+            if (details != null) ...[
+              const SizedBox(height: 6),
+              Text(details, style: const TextStyle(color: Color(0xffc4d7ce))),
+            ],
+            if (available) ...[
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed:
+                    canStop ||
+                        hasProfile && (status == 'off' || status == 'error')
+                    ? onToggle
+                    : null,
+                child: Text(canStop ? 'Отключить' : 'Подключить'),
+              ),
+            ],
           ],
         ),
       ),

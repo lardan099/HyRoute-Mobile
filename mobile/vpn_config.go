@@ -1,0 +1,311 @@
+package mobile
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/lardan099/hyroute-mobile/internal/hy2uri"
+	"github.com/lardan099/hyroute-mobile/internal/hysteria"
+	"github.com/lardan099/hyroute-mobile/internal/rules"
+	"github.com/lardan099/hyroute-mobile/internal/vless"
+)
+
+const vpnDNS = "1.1.1.1"
+
+const (
+	blockTag  = "hyroute-block"
+	directTag = "hyroute-direct"
+)
+
+type vpnProfile struct {
+	profile hysteria.Profile
+	tag     string
+}
+
+// VPNPlan is an immutable snapshot of the selected profiles and local rules.
+type VPNPlan struct {
+	router   *Router
+	profiles []vpnProfile
+	tags     map[string]string
+	selected string
+	appScope string
+	packages []string
+	android  bool
+}
+
+// NewVPNPlan validates the saved selection, rules and app scope before a VPN
+// interface is established. raw is the private app snapshot, not a UI preview.
+func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
+	state, err := decodeClientState(raw)
+	if err != nil {
+		return nil, err
+	}
+	settings := state.Settings
+	cfg := routingConfig{Config: rules.Config{DefaultAction: rules.Tunnel}}
+	if len(settings.Routing) > 0 {
+		if err := json.Unmarshal(settings.Routing, &cfg); err != nil {
+			return nil, errors.New("не удалось прочитать локальные правила")
+		}
+	}
+	all := make(map[string]hysteria.Profile)
+	for _, item := range state.Subscriptions {
+		for _, profile := range item.Snapshot.Servers {
+			if !profile.Missing {
+				all[profile.ID] = profile
+			}
+		}
+	}
+	if settings.Selected == "" || all[settings.Selected].ID == "" {
+		return nil, errors.New("выберите доступный VPN-профиль")
+	}
+	rawRules, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	router, err := newRouter(string(rawRules), settings.Selected, android)
+	if err != nil {
+		return nil, errors.New("не удалось применить локальные правила")
+	}
+	plan := &VPNPlan{router: router, tags: make(map[string]string), selected: settings.Selected, android: android}
+	if android {
+		plan.appScope = settings.AppScope
+		if plan.appScope == "" {
+			plan.appScope = "all"
+		}
+		if plan.appScope != "all" {
+			if (plan.appScope != "only" && plan.appScope != "except") || len(settings.AppPackages) == 0 {
+				return nil, errors.New("выберите приложения для VPN")
+			}
+			for _, id := range settings.AppPackages {
+				if !rules.ValidAppPackage(id) {
+					return nil, errors.New("некорректный список приложений")
+				}
+			}
+			plan.packages = settings.AppPackages
+		}
+	}
+	var add func(string) error
+	add = func(id string) error {
+		if id == "" || plan.tags[id] != "" {
+			return nil
+		}
+		profile, ok := all[id]
+		if !ok {
+			return errors.New("правило или цепочка ссылается на недоступный VPN-профиль")
+		}
+		if upstream := cfg.ViaProfiles[id]; upstream != "" {
+			if err := add(upstream); err != nil {
+				return err
+			}
+		}
+		if err := profile.Validate(); err != nil {
+			return errors.New("неподдерживаемая настройка VPN-профиля")
+		}
+		tag := fmt.Sprintf("hyroute-profile-%d", len(plan.profiles))
+		plan.tags[id] = tag
+		plan.profiles = append(plan.profiles, vpnProfile{profile: profile, tag: tag})
+		return nil
+	}
+	if err := add(settings.Selected); err != nil {
+		return nil, err
+	}
+	for _, rule := range cfg.Rules {
+		if rule.Action == rules.Tunnel && (rule.Enabled == nil || *rule.Enabled) {
+			if err := add(rule.Profile); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return plan, nil
+}
+
+func (p *VPNPlan) AppScope() string     { return p.appScope }
+func (p *VPNPlan) AppPackages() string  { return strings.Join(p.packages, "\n") }
+func (p *VPNPlan) RulePackages() string { return p.router.AndroidPackages() }
+func (p *VPNPlan) DNSServer() string    { return vpnDNS }
+
+type vpnConfiguration struct {
+	plan      *VPNPlan
+	xray      map[string]any
+	balancers map[string]bool
+}
+
+func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(context.Context, string) netip.Addr) (*vpnConfiguration, error) {
+	outbounds := []any{
+		map[string]any{"tag": blockTag, "protocol": "blackhole"},
+		map[string]any{"tag": directTag, "protocol": "freedom"},
+	}
+	var prefixes []string
+	var balances, routeRules []any
+	var observation *vless.Balance
+	balancers := make(map[string]bool)
+	resolved := make(map[string]netip.Addr)
+	resolveOnce := func(host string) netip.Addr {
+		if ip, ok := resolved[host]; ok {
+			return ip
+		}
+		ip := resolve(ctx, host)
+		resolved[host] = ip
+		return ip
+	}
+	for _, target := range p.profiles {
+		profile := target.profile
+		upstream := p.tags[p.router.viaProfiles[profile.ID]]
+		if profile.Balance == nil {
+			ip := resolveOnce(profile.Host)
+			if !ip.IsValid() {
+				return nil, errors.New("не удалось найти адрес VPN-сервера")
+			}
+			out, err := profileOutbound(profile, ip, target.tag)
+			if err != nil {
+				return nil, errors.New("не удалось подготовить VPN-профиль")
+			}
+			setDialerProxy(out, upstream)
+			outbounds = append(outbounds, out)
+			continue
+		}
+		balance := *profile.Balance
+		ips := make([]netip.Addr, len(balance.Nodes))
+		for i, node := range balance.Nodes {
+			ips[i] = resolveOnce(node.Host)
+		}
+		prefix := target.tag + "-node-"
+		tag := target.tag + "-balancer"
+		nodes, config, err := vless.BalanceOutbounds(balance, ips, prefix, tag)
+		if err != nil {
+			return nil, errors.New("не удалось подготовить узлы Автовыбора")
+		}
+		if config["fallbackTag"] == nil {
+			config["fallbackTag"] = blockTag
+		}
+		for _, node := range nodes {
+			setDialerProxy(node.(map[string]any), upstream)
+		}
+		outbounds = append(outbounds, nodes...)
+		outbounds = append(outbounds, map[string]any{
+			"tag": target.tag, "protocol": "loopback", "settings": map[string]any{"inboundTag": tag},
+		})
+		prefixes = append(prefixes, prefix)
+		balances = append(balances, config)
+		if balance.BlockBitTorrent {
+			routeRules = append(routeRules, map[string]any{"type": "field", "inboundTag": []string{tag}, "protocol": []string{"bittorrent"}, "outboundTag": blockTag})
+		}
+		routeRules = append(routeRules, map[string]any{"type": "field", "inboundTag": []string{tag}, "balancerTag": tag})
+		balancers[tag] = true
+		if observation == nil || target.profile.ID == p.selected {
+			observation = &balance
+		}
+	}
+	config := map[string]any{
+		"log":       map[string]any{"loglevel": "none", "access": "none", "dnsLog": false},
+		"outbounds": outbounds,
+		"routing":   map[string]any{"rules": routeRules, "balancers": balances},
+	}
+	if tunnel {
+		config["inbounds"] = []any{map[string]any{
+			"tag": "hyroute-tun", "protocol": "tun", "settings": map[string]any{"name": "hyroute", "MTU": 1400},
+			"sniffing": map[string]any{"enabled": true, "routeOnly": true, "destOverride": []string{"http", "tls", "quic"}},
+		}}
+	}
+	if observation != nil {
+		config["burstObservatory"] = observation.Observatory(prefixes)
+	}
+	return &vpnConfiguration{plan: p, xray: config, balancers: balancers}, nil
+}
+
+func profileOutbound(p hysteria.Profile, ip netip.Addr, tag string) (map[string]any, error) {
+	if p.IsVLESS() {
+		port, err := hysteria.VLESSPort(p.Ports)
+		if err != nil {
+			return nil, err
+		}
+		return vless.Outbound(p.VLESS, vless.Run{Host: p.Host, Port: port, Dial: ip}, tag)
+	}
+	ports, err := hysteria.ParsePorts(p.Ports)
+	if err != nil {
+		return nil, err
+	}
+	if p.TLS.CA != "" || p.TLS.Insecure && !hy2uri.ValidPin(p.TLS.PinSHA256) {
+		return nil, errors.New("неподдерживаемые параметры проверки сертификата")
+	}
+	name := p.TLS.SNI
+	if name == "" {
+		name = p.Host
+	}
+	tls := map[string]any{"serverName": name, "alpn": []string{"h3"}}
+	if pin := p.TLS.PinSHA256; pin != "" {
+		if !hy2uri.ValidPin(pin) {
+			return nil, errors.New("некорректный отпечаток сертификата")
+		}
+		tls["pinnedPeerCertSha256"] = strings.NewReplacer(":", "", "-", "").Replace(strings.TrimSpace(pin))
+	}
+	if p.TLS.ECH != "" {
+		if !hysteria.ECHInline(p.TLS.ECH) {
+			return nil, errors.New("ECH из файла не поддерживается")
+		}
+		tls["echConfigList"] = p.TLS.ECH
+	}
+	stream := map[string]any{
+		"network": "hysteria", "security": "tls", "tlsSettings": tls,
+		"hysteriaSettings": map[string]any{"version": 2, "auth": p.Auth},
+	}
+	var masks []any
+	if len(ports) > 1 || ports[0].From != ports[0].To {
+		min, _ := time.ParseDuration(p.Hop.MinInterval)
+		max, _ := time.ParseDuration(p.Hop.MaxInterval)
+		if min == 0 && max == 0 {
+			min, _ = time.ParseDuration(p.Hop.Interval)
+			max = min
+		}
+		settings := map[string]any{"mode": "intervalRemote", "remotePorts": p.Ports}
+		if min > 0 && max >= min {
+			settings["interval"] = fmt.Sprintf("%d-%d", int(min.Seconds()), int(max.Seconds()))
+		}
+		masks = append(masks, map[string]any{"type": "udphop", "settings": settings})
+	}
+	if p.Obfs.Type != "" {
+		settings := map[string]any{"password": p.Obfs.Password}
+		if strings.EqualFold(p.Obfs.Type, "gecko") {
+			settings["minPacketSize"] = p.Obfs.MinPacketSize
+			settings["maxPacketSize"] = p.Obfs.MaxPacketSize
+		}
+		masks = append(masks, map[string]any{"type": strings.ToLower(p.Obfs.Type), "settings": settings})
+	}
+	if len(masks) > 0 {
+		stream["finalmask"] = map[string]any{"udp": masks}
+	}
+	return map[string]any{
+		"tag": tag, "protocol": "hysteria", "streamSettings": stream,
+		"settings": map[string]any{"version": 2, "address": ip.String(), "port": ports[0].From},
+	}, nil
+}
+
+func setDialerProxy(out map[string]any, upstream string) {
+	if upstream == "" {
+		return
+	}
+	stream := out["streamSettings"].(map[string]any)
+	options, _ := stream["sockopt"].(map[string]any)
+	if options == nil {
+		options = make(map[string]any)
+		stream["sockopt"] = options
+	}
+	options["dialerProxy"] = upstream
+}
+
+func vpnResolve(ctx context.Context, host string) netip.Addr {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.Unmap()
+	}
+	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil || len(addresses) == 0 {
+		return netip.Addr{}
+	}
+	return addresses[0].Unmap()
+}
