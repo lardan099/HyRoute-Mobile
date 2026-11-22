@@ -18,10 +18,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
       let journal = VPNStorage.tunnelJournal
       HyRouteRecordVPNEvent(journal, "vpn_provider_start")
-      guard let state = options?["state"] as? String,
-            let plan = HyRoutePlanVPN(state, geodata.path) else {
-        HyRouteRecordVPNEvent(journal, TunnelStartError.configuration.journalEvent)
-        completionHandler(TunnelStartError.configuration)
+      guard let state = options?["state"] as? String, !state.isEmpty else {
+        HyRouteRecordVPNEvent(journal, TunnelStartError.missingOptions.journalEvent)
+        completionHandler(TunnelStartError.missingOptions)
+        return
+      }
+      var issue: NSString?
+      guard let plan = HyRoutePlanVPN(state, geodata.path, &issue) else {
+        let failure = TunnelStartError.planFailure(issue as String?)
+        HyRouteRecordVPNEvent(journal, failure.journalEvent)
+        completionHandler(failure)
         return
       }
       guard let prepared = HyRoutePrepareVPN(plan) else {

@@ -23,5 +23,7 @@ struct VPNStartupTests {
     let error = TunnelStartError.preparation as NSError
     precondition(error.domain == TunnelStartError.errorDomain)
     precondition(TunnelStartError(rawValue: error.code) == .preparation)
+    precondition(TunnelStartError.planFailure("geo") == .geodata)
+    precondition(TunnelStartError.planFailure("reference") == .missingReference)
   }
 }

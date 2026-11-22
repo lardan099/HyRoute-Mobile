@@ -23,6 +23,47 @@ const (
 	directTag = "hyroute-direct"
 )
 
+var (
+	errVPNState       = errors.New("не удалось открыть настройки VPN")
+	errVPNProfile     = errors.New("выберите доступный VPN-профиль")
+	errVPNRules       = errors.New("не удалось применить локальные правила")
+	errVPNReference   = errors.New("правило или цепочка ссылается на недоступный VPN-профиль")
+	errVPNUnsupported = errors.New("неподдерживаемая настройка VPN-профиля")
+)
+
+// IOSVPNPlanResult carries a plan or a fixed diagnostic identifier. The
+// extension can report the latter even when it cannot write a shared journal.
+type IOSVPNPlanResult struct {
+	plan  *VPNPlan
+	issue string
+}
+
+func InspectIOSVPNPlan(raw string) *IOSVPNPlanResult {
+	plan, err := NewVPNPlan(raw, false)
+	result := &IOSVPNPlanResult{plan: plan}
+	switch {
+	case err == nil:
+	case errors.Is(err, errVPNState):
+		result.issue = "state"
+	case errors.Is(err, errVPNProfile):
+		result.issue = "profile"
+	case errors.Is(err, errVPNRules):
+		result.issue = "rules"
+	case errors.Is(err, errVPNGeodata):
+		result.issue = "geo"
+	case errors.Is(err, errVPNReference):
+		result.issue = "reference"
+	case errors.Is(err, errVPNUnsupported):
+		result.issue = "unsupported"
+	default:
+		result.issue = "configuration"
+	}
+	return result
+}
+
+func (r *IOSVPNPlanResult) Plan() *VPNPlan { return r.plan }
+func (r *IOSVPNPlanResult) Issue() string  { return r.issue }
+
 type vpnProfile struct {
 	profile hysteria.Profile
 	tag     string
@@ -44,25 +85,41 @@ type VPNPlan struct {
 func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 	state, err := decodeClientState(raw)
 	if err != nil {
-		return nil, err
+		return nil, errVPNState
 	}
 	settings := state.Settings
 	cfg := routingConfig{Config: rules.Config{DefaultAction: rules.Tunnel}}
 	if len(settings.Routing) > 0 {
 		if err := json.Unmarshal(settings.Routing, &cfg); err != nil {
-			return nil, errors.New("не удалось прочитать локальные правила")
+			return nil, errVPNRules
 		}
 	}
 	all := make(map[string]hysteria.Profile)
+	var first, firstGroup string
 	for _, item := range state.Subscriptions {
 		for _, profile := range item.Snapshot.Servers {
-			if !profile.Missing {
-				all[profile.ID] = profile
+			if profile.Missing || profile.ID == "" {
+				continue
+			}
+			all[profile.ID] = profile
+			if first == "" {
+				first = profile.ID
+			}
+			if firstGroup == "" && profile.Balance != nil {
+				firstGroup = profile.ID
 			}
 		}
 	}
-	if settings.Selected == "" || all[settings.Selected].ID == "" {
-		return nil, errors.New("выберите доступный VPN-профиль")
+	if !android && all[settings.Selected].ID == "" {
+		// iOS displays the first available group, then the first server, when
+		// the saved selection disappears during a subscription refresh.
+		settings.Selected = firstGroup
+		if settings.Selected == "" {
+			settings.Selected = first
+		}
+	}
+	if all[settings.Selected].ID == "" {
+		return nil, errVPNProfile
 	}
 	rawRules, err := json.Marshal(cfg)
 	if err != nil {
@@ -70,7 +127,10 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 	}
 	router, err := newRouter(string(rawRules), settings.Selected, android)
 	if err != nil {
-		return nil, errors.New("не удалось применить локальные правила")
+		if errors.Is(err, errVPNGeodata) {
+			return nil, errVPNGeodata
+		}
+		return nil, errVPNRules
 	}
 	plan := &VPNPlan{router: router, tags: make(map[string]string), selected: settings.Selected, android: android}
 	if android {
@@ -97,7 +157,7 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 		}
 		profile, ok := all[id]
 		if !ok {
-			return errors.New("правило или цепочка ссылается на недоступный VPN-профиль")
+			return errVPNReference
 		}
 		if upstream := cfg.ViaProfiles[id]; upstream != "" {
 			if err := add(upstream); err != nil {
@@ -105,7 +165,7 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 			}
 		}
 		if err := profile.Validate(); err != nil {
-			return errors.New("неподдерживаемая настройка VPN-профиля")
+			return errVPNUnsupported
 		}
 		tag := fmt.Sprintf("hyroute-profile-%d", len(plan.profiles))
 		plan.tags[id] = tag

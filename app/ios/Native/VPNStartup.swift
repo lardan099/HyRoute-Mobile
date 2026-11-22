@@ -23,6 +23,7 @@ struct VPNStartup {
 
 enum TunnelStartError: Int, CustomNSError {
   case configuration = 1, preparation, networkSettings, engine, cancelled
+  case missingOptions, unreadableState, noProfile, rules, geodata, missingReference, unsupportedProfile
 
   static let errorDomain = "io.hyroute.packet-tunnel"
   var errorCode: Int { rawValue }
@@ -30,6 +31,13 @@ enum TunnelStartError: Int, CustomNSError {
   var journalEvent: String {
     switch self {
     case .configuration: return "vpn_plan_error"
+    case .missingOptions: return "vpn_options_missing"
+    case .unreadableState: return "vpn_state_error"
+    case .noProfile: return "vpn_profile_missing"
+    case .rules: return "vpn_rules_error"
+    case .geodata: return "vpn_geo_error"
+    case .missingReference: return "vpn_reference_missing"
+    case .unsupportedProfile: return "vpn_profile_unsupported"
     case .preparation: return "vpn_prepare_error"
     case .networkSettings: return "vpn_tun_error"
     case .engine: return "vpn_engine_error"
@@ -40,10 +48,29 @@ enum TunnelStartError: Int, CustomNSError {
   var userMessage: String {
     switch self {
     case .configuration: return "VPN-расширение отклонило настройки. Проверьте выбранный профиль и правила."
+    case .missingOptions: return "iOS не передала настройки расширению. Откройте HyRoute и подключитесь на главном экране."
+    case .unreadableState: return "Расширение не смогло прочитать настройки HyRoute."
+    case .noProfile: return "Выберите доступный профиль VPN на главном экране."
+    case .rules: return "Не удалось применить локальные правила. Откройте «Правила» и проверьте условия."
+    case .geodata: return "Расширение не нашло базу или категорию GeoSite/GeoIP, которую используют правила."
+    case .missingReference: return "Правило или цепочка использует профиль, которого больше нет в подписке."
+    case .unsupportedProfile: return "Профиль содержит неподдерживаемые параметры соединения."
     case .preparation: return "Не удалось подготовить VPN. Проверьте доступность сервера и настройки профиля."
     case .networkSettings: return "iOS не смогла настроить интерфейс VPN."
     case .engine: return "VPN-расширение запустилось, но сетевое ядро не смогло подключить интерфейс."
     case .cancelled: return "Запуск VPN отменён."
+    }
+  }
+
+  static func planFailure(_ issue: String?) -> Self {
+    switch issue {
+    case "state": return .unreadableState
+    case "profile": return .noProfile
+    case "rules": return .rules
+    case "geo": return .geodata
+    case "reference": return .missingReference
+    case "unsupported": return .unsupportedProfile
+    default: return .configuration
     }
   }
 }

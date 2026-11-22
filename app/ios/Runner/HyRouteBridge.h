@@ -8,7 +8,7 @@ NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings);
 void HyRouteConfigureGeo(NSString *directory);
 NSString * _Nullable HyRouteGeoTags(void);
 BOOL HyRouteUpdateGeo(void);
-NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory);
+NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSString * _Nullable * _Nonnull issue);
 NSObject * _Nullable HyRoutePrepareVPN(NSObject *plan);
 NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd);
 void HyRouteStopVPN(NSObject *session);

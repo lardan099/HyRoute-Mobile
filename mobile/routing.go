@@ -26,6 +26,8 @@ type routingConfig struct {
 	ViaProfiles map[string]string `json:"viaProfiles,omitempty"`
 }
 
+var errVPNGeodata = errors.New("недоступна категория GeoSite или GeoIP")
+
 // NewRouter compiles local Hyroute rules. An omitted default action blocks
 // unmatched traffic. A tunnel rule can use the selected server by omitting its
 // profile field.
@@ -67,7 +69,7 @@ func newRouter(localRulesJSON, selectedServerID string, android bool) (*Router, 
 		return nil, err
 	}
 	if len(set.Warnings) > 0 {
-		return nil, fmt.Errorf("локальные правила: %s", set.Warnings[0])
+		return nil, fmt.Errorf("%w: %s", errVPNGeodata, set.Warnings[0])
 	}
 	set.Main = selectedServerID
 	slices.Sort(packages)

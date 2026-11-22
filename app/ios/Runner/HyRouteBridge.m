@@ -40,10 +40,11 @@ BOOL HyRouteUpdateGeo(void) {
     return MobileUpdateGeo(&error);
 }
 
-NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory) {
+NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSString * _Nullable * _Nonnull issue) {
     MobileConfigureGeo(geoDirectory);
-    NSError *error = nil;
-    return MobileNewVPNPlan(state, NO, &error);
+    MobileIOSVPNPlanResult *result = MobileInspectIOSVPNPlan(state);
+    *issue = [result issue];
+    return [result plan];
 }
 
 NSObject * _Nullable HyRoutePrepareVPN(NSObject *plan) {

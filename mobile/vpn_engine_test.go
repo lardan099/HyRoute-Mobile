@@ -46,6 +46,41 @@ func TestVPNRoutesThroughEmbeddedVLESSBalance(t *testing.T) {
 		}}}}, endpoint.URL)
 }
 
+func TestIOSVPNPlanUsesDisplayedProfileAfterSelectedServerDisappears(t *testing.T) {
+	const credential = "00000000-0000-4000-8000-000000000001"
+	servers := []hysteria.Profile{
+		{ID: "gone", Missing: true},
+		{ID: "regular", Host: "127.0.0.1", Ports: "443", Auth: "fixture"},
+		{ID: "auto", Protocol: hysteria.ProtoVLESS, Balance: &vless.Balance{Nodes: []vless.Node{{
+			Host: "127.0.0.1", Port: 443, Settings: vless.Settings{ID: credential},
+		}}}},
+	}
+	state := clientState{Subscriptions: []savedSubscription{{Snapshot: importedSubscription{Servers: servers}}},
+		Settings: clientSettings{Selected: "gone"}}
+	check := func(wantProfile, wantIssue string) {
+		t.Helper()
+		data, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := InspectIOSVPNPlan(string(data))
+		if result.Issue() != wantIssue {
+			t.Fatalf("issue = %q, want %q", result.Issue(), wantIssue)
+		}
+		if wantProfile != "" && (result.Plan() == nil || result.Plan().selected != wantProfile) {
+			t.Fatalf("expected selected profile %q", wantProfile)
+		}
+	}
+	check("auto", "")
+	state.Settings.Selected = "regular"
+	check("regular", "")
+	state.Settings.Routing = json.RawMessage(`{"rules":[{"action":"tunnel","domains":["example.test"],"profile":"gone"}]}`)
+	check("", "reference")
+	state.Settings.Routing = nil
+	state.Subscriptions = nil
+	check("", "profile")
+}
+
 func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {
 	const auth = "local-hysteria-test"
 	response := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
