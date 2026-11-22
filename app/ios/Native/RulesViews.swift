@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RulesPage: View {
   @ObservedObject var client: Client
@@ -155,6 +156,7 @@ struct RulesPage: View {
             .hyCard(padding: 12)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("rules-geo")
       }
       .padding(16)
     }
@@ -474,6 +476,14 @@ private struct ChainEditor: View {
   }
 }
 
+private enum GeoDatabase: String, CaseIterable, Identifiable {
+  case site, ip
+
+  var id: Self { self }
+  var kind: String { self == .site ? "geosite" : "geoip" }
+  var filename: String { kind + ".dat" }
+}
+
 private struct GeoCatalog: View {
   @ObservedObject var client: Client
   var select: ((String) -> Void)?
@@ -481,6 +491,10 @@ private struct GeoCatalog: View {
   @State private var query = ""
   @State private var busy = false
   @State private var error: String?
+  @State private var sources: [String: String] = [:]
+  @State private var importKind: GeoDatabase?
+  @State private var importingFile = false
+  @State private var editingSource: GeoDatabase?
 
   var body: some View {
     List {
@@ -492,7 +506,24 @@ private struct GeoCatalog: View {
         .disabled(busy)
         if let error { Text(error).foregroundStyle(.secondary) }
       } footer: {
-        Text("runetfreedom · около 90 МБ")
+        if select == nil { Text("Базы и подписки по ссылкам проверяются раз в сутки.") }
+      }
+      if select == nil {
+        Section("Источники") {
+          ForEach(GeoDatabase.allCases) { kind in
+            Menu {
+              Button {
+                importKind = kind
+                importingFile = true
+              } label: { Label("Импортировать файл", systemImage: "doc") }
+              Button { editingSource = kind } label: { Label("Указать ссылку", systemImage: "link") }
+            } label: {
+              HyRow(title: kind.filename, symbol: "doc", detail: sourceLabel(kind))
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("geo-source-\(kind.rawValue)")
+          }
+        }
       }
       ForEach(tags.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) || name($0).localizedCaseInsensitiveContains(query) }, id: \.self) { tag in
         if let select {
@@ -507,6 +538,32 @@ private struct GeoCatalog: View {
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $query, prompt: "Найти категорию")
     .task { await load(update: false) }
+    .fileImporter(isPresented: $importingFile, allowedContentTypes: [.data]) { result in
+      guard let kind = importKind else { return }
+      switch result {
+      case .success(let url):
+        Task {
+          busy = true
+          let installed = await client.importGeoFile(kind.kind, file: url)
+          busy = false
+          if installed { await load(update: false) }
+          else { error = "Не удалось импортировать \(kind.filename). Проверьте тип файла." }
+        }
+      case .failure:
+        error = "Не удалось открыть файл базы."
+      }
+    }
+    .sheet(item: $editingSource, onDismiss: { Task { await load(update: false) } }) { kind in
+      GeoSourceEditor(client: client, database: kind, source: sources[kind.rawValue] ?? "")
+    }
+  }
+
+  private func sourceLabel(_ kind: GeoDatabase) -> String {
+    switch sources[kind.rawValue] ?? "" {
+    case "": return "runetfreedom"
+    case "file": return "Импортированный файл"
+    default: return "Своя ссылка HTTPS"
+    }
   }
 
   private func row(_ tag: String) -> some View {
@@ -535,8 +592,60 @@ private struct GeoCatalog: View {
     defer { busy = false }
     do {
       tags = try await client.geoTags(update: update)
+      if select == nil { sources = try await client.geoSources() }
     } catch {
       self.error = update ? "Не удалось скачать базы. Проверьте интернет." : "Не удалось прочитать базы правил."
+    }
+  }
+}
+
+private struct GeoSourceEditor: View {
+  @ObservedObject var client: Client
+  let database: GeoDatabase
+  @Environment(\.dismiss) private var dismiss
+  @State private var address: String
+  @State private var error: String?
+  @State private var busy = false
+
+  init(client: Client, database: GeoDatabase, source: String) {
+    self.client = client
+    self.database = database
+    _address = State(initialValue: source == "file" ? "" : source)
+  }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section("Ссылка на файл") {
+          TextField("https://…", text: $address)
+            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+          if let error { Text(error).foregroundStyle(HyStyle.failure) }
+          Button("Сохранить и скачать") { Task { await save(address) } }
+            .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          Button("Вернуть runetfreedom") { Task { await save("") } }
+        }
+      }
+      .hyList()
+      .disabled(busy)
+      .navigationTitle(database.filename)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
+    }
+    .interactiveDismissDisabled(busy)
+  }
+
+  private func save(_ source: String) async {
+    busy = true
+    defer { busy = false }
+    guard await client.saveGeoSource(database.kind, address: source) else {
+      error = "Укажите ссылку HTTPS на файл базы."
+      return
+    }
+    do {
+      _ = try await client.geoTags(update: true)
+      dismiss()
+    } catch {
+      error = "Источник сохранён. Скачать базы пока не удалось."
     }
   }
 }

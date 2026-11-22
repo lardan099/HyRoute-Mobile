@@ -1,9 +1,12 @@
+import BackgroundTasks
 import NetworkExtension
 import SwiftUI
+import UIKit
 
 @main
 @MainActor
 struct HyRouteApp: App {
+  @UIApplicationDelegateAdaptor(HyRouteMaintenanceDelegate.self) private var maintenanceDelegate
   @StateObject private var client = Client()
 
   var body: some Scene {
@@ -13,8 +16,52 @@ struct HyRouteApp: App {
   }
 }
 
+final class HyRouteMaintenanceDelegate: NSObject, UIApplicationDelegate {
+  private nonisolated static let identifier = "io.hyroute.hyrouteMobile.maintenance"
+
+  func application(_ application: UIApplication,
+                   didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    #if targetEnvironment(simulator)
+    if ProcessInfo.processInfo.environment["HYROUTE_LAYOUT_PREVIEW"] != nil { return true }
+    #endif
+    BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.identifier, using: nil) { task in
+      Self.schedule()
+      let maintenance = HyRouteNewMaintenance()
+      let work = Task(priority: .utility) {
+        var success = false
+        do {
+          _ = try await NativeCore.shared.load()
+          _ = try await NativeCore.shared.autoRefresh(maintenance: maintenance)
+          try Task.checkCancellation()
+          success = await Task.detached(priority: .utility) {
+            HyRouteUpdateGeoWithMaintenance(maintenance)
+          }.value
+        } catch {}
+        task.setTaskCompleted(success: success && !Task.isCancelled)
+      }
+      task.expirationHandler = {
+        work.cancel()
+        HyRouteCancelMaintenance(maintenance)
+      }
+    }
+    Self.schedule()
+    return true
+  }
+
+  private nonisolated static func schedule() {
+    BGTaskScheduler.shared.getPendingTaskRequests { requests in
+      guard !requests.contains(where: { $0.identifier == Self.identifier }) else { return }
+      let request = BGProcessingTaskRequest(identifier: Self.identifier)
+      request.requiresNetworkConnectivity = true
+      request.earliestBeginDate = Date(timeIntervalSinceNow: 6 * 60 * 60)
+      try? BGTaskScheduler.shared.submit(request)
+    }
+  }
+}
+
 private struct RootView: View {
   @ObservedObject var client: Client
+  @Environment(\.scenePhase) private var scenePhase
   @State private var tab: Tab = .home
 
   private var previewScreen: String? {
@@ -85,6 +132,14 @@ private struct RootView: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)) { _ in
       client.syncVPNStatus()
+    }
+    .task(id: client.ready && scenePhase == .active) {
+      guard client.ready, scenePhase == .active, previewScreen == nil else { return }
+      while !Task.isCancelled {
+        await client.refreshAutomatically()
+        do { try await Task.sleep(for: .seconds(15 * 60)) }
+        catch { return }
+      }
     }
     .alert("HyRoute", isPresented: Binding(
       get: { client.error != nil },

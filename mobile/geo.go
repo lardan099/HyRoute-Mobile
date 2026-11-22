@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,20 +78,201 @@ func GeoTags() (string, error) {
 	return string(data), err
 }
 
-// UpdateGeo installs the same default geodata as desktop HyRoute.
-func UpdateGeo() error {
+const geoLocalFile = "file"
+
+type geoSettings struct {
+	Site string `json:"site"`
+	IP   string `json:"ip"`
+}
+
+func geoKind(kind string) (geodata.Kind, error) {
+	switch kind {
+	case "geosite":
+		return geodata.Site, nil
+	case "geoip":
+		return geodata.IP, nil
+	default:
+		return 0, errors.New("неизвестный тип базы")
+	}
+}
+
+func (s *geoSettings) source(kind geodata.Kind) *string {
+	if kind == geodata.IP {
+		return &s.IP
+	}
+	return &s.Site
+}
+
+func readGeoSettings(dir string) (geoSettings, error) {
+	var settings geoSettings
+	data, err := os.ReadFile(filepath.Join(dir, "mobile-geo.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return settings, nil
+	}
+	if err != nil {
+		return settings, err
+	}
+	return settings, json.Unmarshal(data, &settings)
+}
+
+func writeGeoSettings(dir string, settings geoSettings) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, "mobile-geo.*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	err = json.NewEncoder(file).Encode(settings)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), filepath.Join(dir, "mobile-geo.json"))
+}
+
+// GeoSettings returns the current source for each type of database.
+func GeoSettings() (string, error) {
+	geoCatalog.Lock()
+	defer geoCatalog.Unlock()
+	if geoCatalog.db == nil {
+		return "", errors.New("хранилище баз правил не настроено")
+	}
+	settings, err := readGeoSettings(geoCatalog.db.Dir)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(settings)
+	return string(data), err
+}
+
+// SetGeoSource changes the HTTPS source for one database. An empty source
+// restores the default download URL.
+func SetGeoSource(kind, address string) error {
+	k, err := geoKind(kind)
+	if err != nil {
+		return err
+	}
+	address = strings.TrimSpace(address)
+	if address != "" {
+		u, err := url.Parse(address)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+			return errors.New("укажите ссылку HTTPS на файл базы")
+		}
+	}
 	geoCatalog.Lock()
 	defer geoCatalog.Unlock()
 	if geoCatalog.db == nil {
 		return errors.New("хранилище баз правил не настроено")
 	}
-	source, _ := geodata.FindSource(geodata.DefaultSource)
+	settings, err := readGeoSettings(geoCatalog.db.Dir)
+	if err != nil {
+		return err
+	}
+	*settings.source(k) = address
+	return writeGeoSettings(geoCatalog.db.Dir, settings)
+}
+
+// ImportGeoFile installs and pins one file. Network updates continue for
+// the other database, but leave the imported file in place.
+func ImportGeoFile(kind, path string) error {
+	k, err := geoKind(kind)
+	if err != nil {
+		return err
+	}
+	geoCatalog.Lock()
+	defer geoCatalog.Unlock()
+	if geoCatalog.db == nil {
+		return errors.New("хранилище баз правил не настроено")
+	}
+	dir := geoCatalog.db.Dir
+	previous, err := readGeoSettings(dir)
+	if err != nil {
+		return err
+	}
+	next := previous
+	*next.source(k) = geoLocalFile
+	if err := writeGeoSettings(dir, next); err != nil {
+		return err
+	}
 	updater := geodata.Updater{DB: geoCatalog.db}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	if err := updater.InstallFile(k, path); err != nil {
+		return errors.Join(err, writeGeoSettings(dir, previous))
+	}
+	return nil
+}
+
+// UpdateGeo refreshes configured network sources on request.
+func UpdateGeo() error {
+	return updateGeo(context.Background(), false)
+}
+
+// AutoUpdateGeo refreshes installed network sources once daily and retries
+// failures after an hour. Selecting a local file opts that database out.
+func AutoUpdateGeo() error {
+	return updateGeo(context.Background(), true)
+}
+
+func updateGeo(parent context.Context, scheduled bool) error {
+	geoCatalog.Lock()
+	defer geoCatalog.Unlock()
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if geoCatalog.db == nil {
+		return errors.New("хранилище баз правил не настроено")
+	}
+	settings, err := readGeoSettings(geoCatalog.db.Dir)
+	if err != nil {
+		return err
+	}
+	source, _ := geodata.FindSource(geodata.DefaultSource)
+	address := func(configured string, fallback string) string {
+		switch configured {
+		case geoLocalFile:
+			return ""
+		case "":
+			return fallback
+		default:
+			return configured
+		}
+	}
+	source.Site = address(settings.Site, source.Site)
+	source.IP = address(settings.IP, source.IP)
+	updater := geodata.Updater{DB: geoCatalog.db, Validate: func(kind geodata.Kind, path string) error {
+		if *settings.source(kind) != "" {
+			return geodata.CheckKind(kind, path)
+		}
+		return nil
+	}}
+	if scheduled {
+		state := updater.State()
+		if settings.Site == "" && state.Site == nil && geoCatalog.db.Missing(geodata.Site) {
+			source.Site = ""
+		}
+		if settings.IP == "" && state.IP == nil && geoCatalog.db.Missing(geodata.IP) {
+			source.IP = ""
+		}
+		interval := 24 * time.Hour
+		if state.LastError != "" {
+			interval = time.Hour
+		}
+		if time.Since(state.Checked) < interval {
+			return nil
+		}
+	}
+	if source.Site == "" && source.IP == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
-	_, err := updater.Update(ctx, source, false)
-	if err == nil && (geoCatalog.db.Missing(geodata.Site) || geoCatalog.db.Missing(geodata.IP)) {
-		return errors.New("скачаны не все базы правил")
+	if scheduled {
+		_, err = updater.UpdateScheduled(ctx, source)
+	} else {
+		_, err = updater.Update(ctx, source, false)
 	}
 	return err
 }

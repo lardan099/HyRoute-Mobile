@@ -45,7 +45,11 @@ func FetchSubscription(rawURL string) (string, error) {
 }
 
 func fetchSubscription(client *http.Client, rawURL string) (string, error) {
-	request, err := http.NewRequest(http.MethodGet, strings.TrimSpace(rawURL), nil)
+	return fetchSubscriptionContext(context.Background(), client, rawURL)
+}
+
+func fetchSubscriptionContext(ctx context.Context, client *http.Client, rawURL string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(rawURL), nil)
 	if err != nil || request.URL.Hostname() == "" || request.URL.Scheme != "https" {
 		return "", errors.New("нужна ссылка подписки https://")
 	}

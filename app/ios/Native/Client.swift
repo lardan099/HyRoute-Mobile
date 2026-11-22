@@ -4,7 +4,8 @@ import SwiftUI
 
 private enum CoreError: Error { case invalidResult, missingTunnelExtension }
 
-private actor NativeCore {
+actor NativeCore {
+  static let shared = NativeCore()
   private let store = ClientStore()
 
   func load() throws -> ClientState {
@@ -50,15 +51,21 @@ private actor NativeCore {
     try persist(HyRouteRefreshSubscription(try store.read(), id))
   }
 
+  func autoRefresh(maintenance: NSObject? = nil) async throws -> ClientState {
+    let before = try store.read()
+    let updated = await Task.detached(priority: .utility) {
+      if let maintenance { return HyRouteRefreshWithMaintenance(maintenance, before) }
+      return HyRouteAutoRefreshSubscriptions(before)
+    }.value
+    try Task.checkCancellation()
+    let current = try store.read()
+    if let updated, updated != current, current == before { return try persist(updated) }
+    return try view(current)
+  }
+
   func save(_ settings: ClientSettings) throws -> ClientState {
     let raw = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
     return try persist(HyRouteSaveSettings(try store.read(), raw))
-  }
-
-  func geoTags(update: Bool) throws -> [String] {
-    if update && !HyRouteUpdateGeo() { throw CoreError.invalidResult }
-    guard let tags = HyRouteGeoTags() else { throw CoreError.invalidResult }
-    return try JSONDecoder().decode([String].self, from: Data(tags.utf8))
   }
 
   private func persist(_ raw: String?) throws -> ClientState {
@@ -76,13 +83,14 @@ private actor NativeCore {
 
 @MainActor
 final class Client: ObservableObject {
-  private let core = NativeCore()
+  private let core = NativeCore.shared
   private var manager: NETunnelProviderManager?
   private var startup: (state: VPNStartup, began: ContinuousClock.Instant)?
   private var watchdog: Task<Void, Never>?
   private var attemptID = UUID()
   private var stoppingVPN = false
   private var mayRetryExtension = false
+  private var updatingAutomatically = false
   @Published private(set) var state = ClientState()
   @Published private(set) var ready = false
   @Published private(set) var busy = false
@@ -353,7 +361,45 @@ final class Client: ObservableObject {
   }
 
   func geoTags(update: Bool) async throws -> [String] {
-    try await core.geoTags(update: update)
+    try await Task.detached(priority: .utility) {
+      if update && !HyRouteUpdateGeo() { throw CoreError.invalidResult }
+      guard let tags = HyRouteGeoTags() else { throw CoreError.invalidResult }
+      return try JSONDecoder().decode([String].self, from: Data(tags.utf8))
+    }.value
+  }
+
+  func geoSources() async throws -> [String: String] {
+    try await Task.detached(priority: .utility) {
+      guard let raw = HyRouteGeoSettings() else { throw CoreError.invalidResult }
+      return try JSONDecoder().decode([String: String].self, from: Data(raw.utf8))
+    }.value
+  }
+
+  func saveGeoSource(_ kind: String, address: String) async -> Bool {
+    await Task.detached(priority: .utility) { HyRouteSetGeoSource(kind, address) }.value
+  }
+
+  func importGeoFile(_ kind: String, file: URL) async -> Bool {
+    await Task.detached(priority: .utility) {
+      let scoped = file.startAccessingSecurityScopedResource()
+      defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+      var coordinationError: NSError?
+      var installed = false
+      NSFileCoordinator().coordinate(readingItemAt: file, options: [], error: &coordinationError) { item in
+        installed = HyRouteImportGeoFile(kind, item.path)
+      }
+      return coordinationError == nil && installed
+    }.value
+  }
+
+  func refreshAutomatically() async {
+    guard ready, !updatingAutomatically else { return }
+    updatingAutomatically = true
+    defer { updatingAutomatically = false }
+    if let snapshot = try? await core.autoRefresh() { state = snapshot }
+    if !Task.isCancelled {
+      _ = await Task.detached(priority: .utility) { HyRouteAutoUpdateGeo() }.value
+    }
   }
 
   private func save(_ settings: ClientSettings, reportError: Bool = true) async -> Bool {

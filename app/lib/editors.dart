@@ -138,9 +138,14 @@ class RuleEditor extends StatefulWidget {
 }
 
 class GeoCatalogDialog extends StatefulWidget {
-  const GeoCatalogDialog({super.key, required this.core});
+  const GeoCatalogDialog({
+    super.key,
+    required this.core,
+    this.manageSources = false,
+  });
 
   final ClientCore core;
+  final bool manageSources;
 
   @override
   State<GeoCatalogDialog> createState() => _GeoCatalogDialogState();
@@ -151,6 +156,14 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
   var _query = '';
   var _busy = true;
   String? _error;
+  var _sources = <String, String>{};
+
+  MaintenanceControl? get _maintenance {
+    final core = widget.core;
+    return widget.manageSources && core is MaintenanceControl
+        ? core as MaintenanceControl
+        : null;
+  }
 
   @override
   void initState() {
@@ -166,13 +179,78 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
     try {
       if (update) await widget.core.updateGeo();
       final tags = await widget.core.geoTags();
-      if (mounted) setState(() => _tags = tags);
+      final sources = await _maintenance?.geoSources();
+      if (mounted) {
+        setState(() {
+          _tags = tags;
+          _sources = sources ?? {};
+        });
+      }
     } catch (_) {
       if (mounted) {
         setState(
           () => _error = update
               ? 'Не удалось обновить базы правил. Проверьте интернет.'
               : 'Не удалось прочитать базы правил.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _changeSource(String kind, bool importing) async {
+    final maintenance = _maintenance;
+    if (maintenance == null || _busy) return;
+    String? source;
+    if (!importing) {
+      var address = _sources[kind == 'geosite' ? 'site' : 'ip'] ?? '';
+      if (address == 'file') address = '';
+      source = await showDialog<String>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: Text('$kind.dat'),
+          content: TextFormField(
+            initialValue: address,
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(labelText: 'Ссылка HTTPS'),
+            onChanged: (value) => address = value,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, ''),
+              child: const Text('runetfreedom'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (address.trim().isNotEmpty)
+                  Navigator.pop(dialog, address.trim());
+              },
+              child: const Text('Сохранить'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || source == null) return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      if (importing) {
+        if (!await maintenance.importGeoFile(kind)) return;
+      } else {
+        await maintenance.setGeoSource(kind, source!);
+      }
+      if (mounted) await _load(update: !importing);
+    } on PlatformException {
+      if (mounted) {
+        setState(
+          () => _error = importing
+              ? 'Не удалось импортировать $kind.dat. Проверьте тип файла.'
+              : 'Укажите ссылку HTTPS на файл базы.',
         );
       }
     } finally {
@@ -190,14 +268,39 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
         )
         .toList();
     return AlertDialog(
-      title: const Text('Готовые списки'),
+      title: Text(widget.manageSources ? 'GeoSite и GeoIP' : 'Готовые списки'),
       content: SizedBox(
         width: 400,
         height: 300,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Источник runetfreedom · загрузка около 90 МБ'),
+            if (_maintenance != null)
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final kind in ['geosite', 'geoip'])
+                    PopupMenuButton<bool>(
+                      enabled: !_busy,
+                      tooltip: 'Источник $kind.dat',
+                      onSelected: (importing) => _changeSource(kind, importing),
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: true,
+                          child: Text('Импортировать файл'),
+                        ),
+                        PopupMenuItem(
+                          value: false,
+                          child: Text('Указать ссылку'),
+                        ),
+                      ],
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text('$kind.dat ▾'),
+                      ),
+                    ),
+                ],
+              ),
             const SizedBox(height: 12),
             if (_busy) const LinearProgressIndicator(),
             if (_error case final error?) Text(error),

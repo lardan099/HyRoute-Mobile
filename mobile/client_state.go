@@ -1,17 +1,21 @@
 package mobile
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
+	"time"
 )
 
 type savedSubscription struct {
-	ID       string               `json:"id"`
-	URL      string               `json:"url,omitempty"`
-	Snapshot importedSubscription `json:"snapshot"`
+	ID          string               `json:"id"`
+	URL         string               `json:"url,omitempty"`
+	Snapshot    importedSubscription `json:"snapshot"`
+	RefreshedAt int64                `json:"refreshedAt,omitempty"`
+	AttemptedAt int64                `json:"attemptedAt,omitempty"`
 }
 
 type clientSettings struct {
@@ -60,6 +64,7 @@ func AddClientSubscription(raw, input string, fromURL bool) (string, error) {
 	}
 	if fromURL {
 		item.URL = input
+		item.RefreshedAt = time.Now().Unix()
 	}
 	state.Subscriptions = append(state.Subscriptions, item)
 	if state.Settings.Selected == "" {
@@ -102,12 +107,54 @@ func refreshClientSubscription(state clientState, index int) (string, error) {
 	return mergeClientSubscription(state, index, fresh)
 }
 
+// AutoRefreshSubscriptions updates due URL subscriptions in the encrypted snapshot.
+func AutoRefreshSubscriptions(raw string) (string, error) {
+	return refreshDueSubscriptions(context.Background(), raw)
+}
+
+func autoRefreshSubscriptions(ctx context.Context, raw string, now time.Time, fetch func(context.Context, string) (string, error)) (string, error) {
+	state, err := decodeClientState(raw)
+	if err != nil {
+		return "", err
+	}
+	changed := false
+	for index := range state.Subscriptions {
+		item := &state.Subscriptions[index]
+		if item.URL == "" || now.Sub(time.Unix(item.RefreshedAt, 0)) < 24*time.Hour ||
+			now.Sub(time.Unix(item.AttemptedAt, 0)) < time.Hour || ctx.Err() != nil {
+			continue
+		}
+		changed = true
+		item.AttemptedAt = now.Unix()
+		fresh, err := fetch(ctx, item.URL)
+		if err != nil {
+			continue
+		}
+		if err := applyRefreshedSubscription(&state, index, fresh, now); err != nil {
+			return "", err
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	data, err := json.Marshal(state)
+	return string(data), err
+}
+
 func mergeClientSubscription(state clientState, index int, fresh string) (string, error) {
+	if err := applyRefreshedSubscription(&state, index, fresh, time.Now()); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(state)
+	return string(data), err
+}
+
+func applyRefreshedSubscription(state *clientState, index int, fresh string, now time.Time) error {
 	item := &state.Subscriptions[index]
 	var cfg routingConfig
 	if raw := state.Settings.Routing; len(raw) != 0 {
 		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return "", err
+			return err
 		}
 	}
 	references := []string{state.Settings.Selected}
@@ -121,22 +168,23 @@ func mergeClientSubscription(state clientState, index int, fresh string) (string
 	}
 	ids, err := json.Marshal(references)
 	if err != nil {
-		return "", err
+		return err
 	}
 	previous, err := json.Marshal(item.Snapshot)
 	if err != nil {
-		return "", err
+		return err
 	}
 	merged, err := MergeSubscription(string(previous), fresh, string(ids))
 	if err != nil {
-		return "", err
+		return err
 	}
 	item.Snapshot = importedSubscription{}
 	if err := json.Unmarshal([]byte(merged), &item.Snapshot); err != nil {
-		return "", err
+		return err
 	}
-	data, err := json.Marshal(state)
-	return string(data), err
+	item.RefreshedAt = now.Unix()
+	item.AttemptedAt = now.Unix()
+	return nil
 }
 
 // SaveClientSettings validates the routing settings before replacing them.

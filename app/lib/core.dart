@@ -21,6 +21,13 @@ abstract interface class VPNControl {
   Future<void> stopVpn();
 }
 
+abstract interface class MaintenanceControl {
+  Future<ClientState> refreshDue();
+  Future<Map<String, String>> geoSources();
+  Future<void> setGeoSource(String kind, String address);
+  Future<bool> importGeoFile(String kind);
+}
+
 abstract interface class DiagnosticsControl {
   Future<List<String>> vpnJournal();
   Future<ProbeSnapshot> startProbe(String scope, String id);
@@ -44,7 +51,8 @@ class ProbeSnapshot {
   final List<Map<String, dynamic>> results;
 }
 
-class PlatformCore implements ClientCore, VPNControl, DiagnosticsControl {
+class PlatformCore
+    implements ClientCore, VPNControl, DiagnosticsControl, MaintenanceControl {
   const PlatformCore();
 
   static const _channel = MethodChannel('io.hyroute/core');
@@ -130,6 +138,23 @@ class PlatformCore implements ClientCore, VPNControl, DiagnosticsControl {
 
   @override
   Future<void> updateGeo() => _channel.invokeMethod<void>('updateGeo');
+
+  @override
+  Future<ClientState> refreshDue() async =>
+      ClientState.decode(await _channel.invokeMethod<String>('refreshDue'));
+
+  @override
+  Future<Map<String, String>> geoSources() async =>
+      await _channel.invokeMapMethod<String, String>('geoSources') ?? {};
+
+  @override
+  Future<void> setGeoSource(String kind, String address) => _channel
+      .invokeMethod<void>('setGeoSource', {'kind': kind, 'address': address});
+
+  @override
+  Future<bool> importGeoFile(String kind) async =>
+      await _channel.invokeMethod<bool>('importGeoFile', {'kind': kind}) ??
+      false;
 
   @override
   Future<Map<String, String>> launchableApps() async =>

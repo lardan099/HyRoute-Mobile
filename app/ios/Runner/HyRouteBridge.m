@@ -25,6 +25,31 @@ NSString * _Nullable HyRouteRefreshSubscription(NSString *state, NSString *subsc
     return error == nil ? updated : nil;
 }
 
+NSString * _Nullable HyRouteAutoRefreshSubscriptions(NSString *state) {
+    NSError *error = nil;
+    NSString *updated = MobileAutoRefreshSubscriptions(state, &error);
+    return error == nil ? updated : nil;
+}
+
+NSObject *HyRouteNewMaintenance(void) {
+    return MobileNewMaintenance();
+}
+
+void HyRouteCancelMaintenance(NSObject *maintenance) {
+    [(MobileMaintenance *)maintenance cancel];
+}
+
+NSString * _Nullable HyRouteRefreshWithMaintenance(NSObject *maintenance, NSString *state) {
+    NSError *error = nil;
+    NSString *updated = [(MobileMaintenance *)maintenance refreshSubscriptions:state error:&error];
+    return error == nil ? updated : nil;
+}
+
+BOOL HyRouteUpdateGeoWithMaintenance(NSObject *maintenance) {
+    NSError *error = nil;
+    return [(MobileMaintenance *)maintenance updateGeo:&error];
+}
+
 void HyRouteConfigureGeo(NSString *directory) {
     MobileConfigureGeo(directory);
 }
@@ -38,6 +63,27 @@ NSString * _Nullable HyRouteGeoTags(void) {
 BOOL HyRouteUpdateGeo(void) {
     NSError *error = nil;
     return MobileUpdateGeo(&error);
+}
+
+BOOL HyRouteAutoUpdateGeo(void) {
+    NSError *error = nil;
+    return MobileAutoUpdateGeo(&error);
+}
+
+NSString * _Nullable HyRouteGeoSettings(void) {
+    NSError *error = nil;
+    NSString *settings = MobileGeoSettings(&error);
+    return error == nil ? settings : nil;
+}
+
+BOOL HyRouteSetGeoSource(NSString *kind, NSString *address) {
+    NSError *error = nil;
+    return MobileSetGeoSource(kind, address, &error);
+}
+
+BOOL HyRouteImportGeoFile(NSString *kind, NSString *path) {
+    NSError *error = nil;
+    return MobileImportGeoFile(kind, path, &error);
 }
 
 NSString *HyRouteUnavailableGeo(NSString *state) {

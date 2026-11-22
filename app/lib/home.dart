@@ -16,7 +16,7 @@ class Home extends StatefulWidget {
   State<Home> createState() => _HomeState();
 }
 
-class _HomeState extends State<Home> {
+class _HomeState extends State<Home> with WidgetsBindingObserver {
   var _subscriptions = <Subscription>[];
   var _rules = <RouteRule>[];
   var _via = <String, String>{};
@@ -30,6 +30,8 @@ class _HomeState extends State<Home> {
   bool _loading = true;
   bool _storageFailed = false;
   Timer? _vpnTimer;
+  Timer? _maintenanceTimer;
+  bool _updatingAutomatically = false;
   var _vpnStatus = 'off';
 
   VPNControl? get _vpn {
@@ -55,6 +57,7 @@ class _HomeState extends State<Home> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadState();
     if (_vpn != null) {
       _readVPNStatus();
@@ -67,8 +70,46 @@ class _HomeState extends State<Home> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _maintenanceTimer?.cancel();
     _vpnTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _maintenanceTimer?.cancel();
+    if (state == AppLifecycleState.resumed && !_loading && !_storageFailed) {
+      _startMaintenance();
+    }
+  }
+
+  void _startMaintenance() {
+    if (widget.core is! MaintenanceControl || _vpn == null) return;
+    unawaited(_refreshDue());
+    _maintenanceTimer?.cancel();
+    _maintenanceTimer = Timer.periodic(
+      const Duration(minutes: 15),
+      (_) => _refreshDue(),
+    );
+  }
+
+  Future<void> _refreshDue() async {
+    if (_updatingAutomatically || _importing || _validating) return;
+    final core = widget.core;
+    if (core is! MaintenanceControl) return;
+    _updatingAutomatically = true;
+    try {
+      final state = await (core as MaintenanceControl).refreshDue();
+      if (mounted && !_importing && !_validating)
+        setState(() => _restore(state));
+    } on PlatformException {
+      // The saved state remains usable until the next attempt.
+    } on MissingPluginException {
+      // Prior native builds can still open the saved state.
+    } finally {
+      _updatingAutomatically = false;
+    }
   }
 
   Future<void> _readVPNStatus() async {
@@ -107,6 +148,11 @@ class _HomeState extends State<Home> {
       if (mounted) setState(() => _storageFailed = true);
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+    if (mounted &&
+        !_storageFailed &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      _startMaintenance();
     }
   }
 
@@ -301,7 +347,10 @@ class _HomeState extends State<Home> {
   );
 
   Future<void> _openGeo() async {
-    final tag = await _pickGeoTag();
+    final tag = await showDialog<String>(
+      context: context,
+      builder: (_) => GeoCatalogDialog(core: widget.core, manageSources: true),
+    );
     if (mounted && tag != null) await _editRule(null, tag);
   }
 

@@ -1,10 +1,76 @@
 package mobile
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestAutomaticSubscriptionRefreshPreservesFailuresAndLocalInputs(t *testing.T) {
+	const server = "vless://test-user@regular.example:443?security=tls#Regular"
+	raw, err := AddClientSubscription("", server, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeClientState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := state.Subscriptions[0]
+	now := time.Now().Truncate(time.Second)
+	success := local
+	success.ID, success.URL = "renewed", "https://example.test/renewed"
+	failure := local
+	failure.ID, failure.URL = "failed", "https://example.test/failed"
+	recent := local
+	recent.ID, recent.URL, recent.RefreshedAt = "fresh", "https://example.test/fresh", now.Unix()
+	state.Subscriptions = []savedSubscription{local, success, failure, recent}
+	fresh, err := ImportSubscription([]byte(server + "\n" + strings.ReplaceAll(server, "regular.example", "new.example")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requested []string
+	fetch := func(_ context.Context, address string) (string, error) {
+		requested = append(requested, address)
+		if address == success.URL {
+			return fresh, nil
+		}
+		return "", errors.New("unavailable")
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := autoRefreshSubscriptions(context.Background(), string(data), now, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := decodeClientState(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(requested, []string{success.URL, failure.URL}) {
+		t.Fatalf("updated wrong subscriptions: %v", requested)
+	}
+	if len(result.Subscriptions[1].Snapshot.Servers) != 2 || result.Subscriptions[1].RefreshedAt != now.Unix() {
+		t.Fatal("successful refresh did not update the snapshot and timestamp")
+	}
+	if !reflect.DeepEqual(result.Subscriptions[2].Snapshot, failure.Snapshot) || result.Subscriptions[2].AttemptedAt != now.Unix() {
+		t.Fatal("failed refresh must retain the old snapshot and save a retry timestamp")
+	}
+	requested = nil
+	if current, err := autoRefreshSubscriptions(context.Background(), updated, now.Add(5*time.Minute), fetch); err != nil || current != updated || len(requested) != 0 {
+		t.Fatalf("subscriptions were retried early: %v, %v", requested, err)
+	}
+	if _, err := autoRefreshSubscriptions(context.Background(), updated, now.Add(time.Hour), fetch); err != nil ||
+		!reflect.DeepEqual(requested, []string{failure.URL}) {
+		t.Fatalf("failed subscription did not become due: %v, %v", requested, err)
+	}
+}
 
 func TestRefreshSnapshotAddsAutoWithoutChangingExistingSelection(t *testing.T) {
 	const ordinary = "vless://test-user@regular.example:443?security=tls#Regular"

@@ -157,6 +157,7 @@ type Downloader func(ctx context.Context, url string, attempt int) (*http.Respon
 type Updater struct {
 	DB       *DB
 	Download Downloader
+	Validate func(Kind, string) error
 	// MaxSize caps a download (default 300 MB).
 	MaxSize int64
 	// Progress receives (kind, done, total) while downloading.
@@ -428,6 +429,11 @@ func (u *Updater) updateFile(ctx context.Context, k Kind, url string, cur *FileS
 	if err != nil {
 		return FileState{}, false, fmt.Errorf("скачанный файл не похож на базу правил: %v", err)
 	}
+	if u.Validate != nil {
+		if err := u.Validate(k, tmp); err != nil {
+			return FileState{}, false, err
+		}
+	}
 	if held && strings.EqualFold(got, cur.RolledBackFrom) {
 		return keep, false, nil
 	}
@@ -570,7 +576,7 @@ func (u *Updater) fetchSum(ctx context.Context, url string, attempt int) (string
 // its path, SHA-256 and size. The file gets a random name that did not
 // exist (see writeFile) and reaches the disk before it is renamed into
 // place: after a power cut the database is not left full of zeros.
-func (u *Updater) download(ctx context.Context, k Kind, url string, attempt int) (path, sum string, size int64, err error) {
+func (u *Updater) download(ctx context.Context, k Kind, url string, attempt int) (string, string, int64, error) {
 	resp, err := u.get(ctx, url, attempt)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("не удалось скачать: %v", err)
@@ -579,11 +585,15 @@ func (u *Updater) download(ctx context.Context, k Kind, url string, attempt int)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", 0, fmt.Errorf("сервер ответил %s", resp.Status)
 	}
+	return u.stage(k, resp.Body, resp.ContentLength)
+}
+
+func (u *Updater) stage(k Kind, reader io.Reader, length int64) (path, sum string, size int64, err error) {
 	limit := u.MaxSize
 	if limit <= 0 {
 		limit = 300 << 20
 	}
-	if resp.ContentLength > limit {
+	if length > limit {
 		return "", "", 0, fmt.Errorf("файл больше %d МБ", limit>>20)
 	}
 	f, err := os.CreateTemp(u.DB.Dir, k.File()+".*.new")
@@ -596,12 +606,12 @@ func (u *Updater) download(ctx context.Context, k Kind, url string, attempt int)
 		}
 	}()
 	h := sha256.New()
-	pw := &progressWriter{total: resp.ContentLength, f: func(done, total int64) {
+	pw := &progressWriter{total: length, f: func(done, total int64) {
 		if u.Progress != nil {
 			u.Progress(k, done, total)
 		}
 	}}
-	n, err := io.Copy(io.MultiWriter(f, h, pw), io.LimitReader(resp.Body, limit+1))
+	n, err := io.Copy(io.MultiWriter(f, h, pw), io.LimitReader(reader, limit+1))
 	if err == nil {
 		err = f.Sync()
 	}
@@ -614,10 +624,42 @@ func (u *Updater) download(ctx context.Context, k Kind, url string, attempt int)
 	if n > limit {
 		return "", "", 0, fmt.Errorf("файл больше %d МБ", limit>>20)
 	}
-	if resp.ContentLength > 0 && n != resp.ContentLength {
-		return "", "", 0, fmt.Errorf("загрузка оборвалась: %d из %d байт", n, resp.ContentLength)
+	if length > 0 && n != length {
+		return "", "", 0, fmt.Errorf("загрузка оборвалась: %d из %d байт", n, length)
 	}
 	return f.Name(), hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// InstallFile copies a user-selected file into the database directory after
+// validating its format and type. Invalid imports leave the old file intact.
+func (u *Updater) InstallFile(k Kind, path string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if err := os.MkdirAll(u.DB.Dir, 0o700); err != nil {
+		return err
+	}
+	file, err := openRead(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	tmp, _, _, err := u.stage(k, file, info.Size())
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err := CheckKind(k, tmp); err != nil {
+		return err
+	}
+	if err := renameRetry(tmp, u.DB.path(k)); err != nil {
+		return err
+	}
+	u.DB.Forget()
+	return nil
 }
 
 type progressWriter struct {

@@ -6,7 +6,56 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
+
+// CheckKind validates the bodies of a GeoIP or GeoSite file. Their category
+// indexes have the same wire format, but a CIDR and a domain differ.
+func CheckKind(kind Kind, path string) error {
+	index, err := buildIndex(path)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, item := range index {
+		data, err := readSpan(path, item)
+		if err != nil {
+			return err
+		}
+		p := pb{data}
+		for !p.done() {
+			num, wire, err := p.field()
+			if err != nil {
+				return err
+			}
+			if num != 2 || wire != 2 {
+				if err := p.skip(wire); err != nil {
+					return err
+				}
+				continue
+			}
+			entry, err := p.bytes()
+			if err != nil {
+				return err
+			}
+			if kind == IP {
+				if _, valid := decodeCIDR(entry); !valid {
+					return errors.New("некорректная сеть в GeoIP")
+				}
+			} else {
+				typ, value, _, err := decodeDomain(entry)
+				if err != nil || typ < typePlain || typ > typeFull || value == "" || !utf8.ValidString(value) {
+					return errors.New("некорректная запись в GeoSite")
+				}
+			}
+			found = true
+		}
+	}
+	if !found {
+		return errors.New("в базе нет записей")
+	}
+	return nil
+}
 
 // maxCategory bounds one category of a file (buildIndex).
 const maxCategory = 128 << 20

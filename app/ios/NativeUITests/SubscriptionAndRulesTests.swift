@@ -59,4 +59,17 @@ final class SubscriptionAndRulesTests: XCTestCase {
     let canSave = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
     XCTAssertEqual(XCTWaiter.wait(for: [canSave], timeout: 10), .completed)
   }
+
+  func testGeoSourcesOpenFromRoutingSettings() {
+    let app = launch()
+    tap(app.buttons["tab-rules"])
+    tap(app.segmentedControls.buttons["Настройки"].firstMatch)
+    tap(app.buttons["rules-geo"])
+    tap(app.buttons["geo-source-site"])
+    XCTAssertTrue(app.buttons["Импортировать файл"].exists)
+    tap(app.buttons["Указать ссылку"])
+    XCTAssertTrue(app.navigationBars["geosite.dat"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.textFields["https://…"].exists)
+    XCTAssertTrue(app.buttons["Вернуть runetfreedom"].exists)
+  }
 }

@@ -19,6 +19,7 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
 final class ClientStore {
+    static final Object LOCK = new Object();
     private static final String KEY_ALIAS = "hyroute.client-state.v1";
     private static final String KEY_STORE = "AndroidKeyStore";
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
@@ -49,6 +50,12 @@ final class ClientStore {
     }
 
     String read() throws IOException, GeneralSecurityException {
+        synchronized (LOCK) {
+            return readState();
+        }
+    }
+
+    private String readState() throws IOException, GeneralSecurityException {
         byte[] content;
         try {
             content = file.readFully();
@@ -67,6 +74,23 @@ final class ClientStore {
     }
 
     void write(String state) throws IOException, GeneralSecurityException {
+        synchronized (LOCK) {
+            writeState(state);
+        }
+    }
+
+    String writeIfCurrent(String previous, String updated) throws IOException, GeneralSecurityException {
+        synchronized (LOCK) {
+            String current = readState();
+            if (!current.equals(previous) || updated.equals(current) || Thread.currentThread().isInterrupted()) {
+                return current;
+            }
+            writeState(updated);
+            return updated;
+        }
+    }
+
+    private void writeState(String state) throws IOException, GeneralSecurityException {
         Cipher cipher = Cipher.getInstance(TRANSFORMATION);
         cipher.init(Cipher.ENCRYPT_MODE, key(true));
         byte[] nonce = cipher.getIV();
