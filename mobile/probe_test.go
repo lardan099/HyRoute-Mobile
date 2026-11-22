@@ -89,3 +89,14 @@ func TestVPNJournalLimitsAndValidatesEvents(t *testing.T) {
 		t.Fatal("journal did not keep only the newest known events")
 	}
 }
+
+func TestVPNJournalKeepsOnlySafeSystemErrorDetails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.json")
+	RecordVPNError(path, "vpn_ios_error", "NEVPNConnectionErrorDomain", 15)
+	RecordVPNError(path, "vpn_ios_error", "https://private.example/secret", 2)
+	log := VPNJournal(path, "")
+	if !strings.Contains(log, "NEVPNConnectionErrorDomain, код 15") ||
+		!strings.Contains(log, "iOS, код 2") || strings.Contains(log, "private.example") {
+		t.Fatalf("unexpected error details in journal: %s", log)
+	}
+}

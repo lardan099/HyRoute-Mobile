@@ -17,13 +17,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       let geodata = VPNStorage.sharedGeodata ?? FileManager.default.temporaryDirectory
         .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
       let journal = VPNStorage.tunnelJournal
-      guard let state = options?["state"] as? String else {
-        HyRouteRecordVPNEvent(journal, "vpn_plan_error")
-        completionHandler(TunnelError.configuration)
+      HyRouteRecordVPNEvent(journal, "vpn_provider_start")
+      guard let state = options?["state"] as? String,
+            let plan = HyRoutePlanVPN(state, geodata.path) else {
+        HyRouteRecordVPNEvent(journal, TunnelStartError.configuration.journalEvent)
+        completionHandler(TunnelStartError.configuration)
         return
       }
-      guard let prepared = HyRoutePrepareVPN(state, geodata.path, journal) else {
-        completionHandler(TunnelError.configuration)
+      guard let prepared = HyRoutePrepareVPN(plan) else {
+        HyRouteRecordVPNEvent(journal, TunnelStartError.preparation.journalEvent)
+        completionHandler(TunnelStartError.preparation)
         return
       }
 
@@ -31,7 +34,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       self.setTunnelNetworkSettings(Self.networkSettings()) { error in
         self.worker.async {
           guard generation == self.generation else {
-            completionHandler(TunnelError.cancelled)
+            completionHandler(TunnelStartError.cancelled)
             return
           }
           do {
@@ -39,7 +42,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let bridge = try PacketBridge(flow: self.packetFlow, queue: self.worker)
             guard let session = HyRouteStartVPN(prepared, bridge.coreFD) else {
               bridge.close()
-              throw TunnelError.engine
+              throw TunnelStartError.engine
             }
             self.packetBridge = bridge
             self.session = session
@@ -47,8 +50,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             HyRouteRecordVPNEvent(journal, "vpn_running")
             completionHandler(nil)
           } catch {
-            HyRouteRecordVPNEvent(journal, (error as? TunnelError) == .engine ? "vpn_engine_error" : "vpn_tun_error")
-            completionHandler(error)
+            let startError = error as? TunnelStartError ?? .networkSettings
+            let detail = error as NSError
+            let source = detail.domain == TunnelStartError.errorDomain ? "PacketTunnel" : detail.domain
+            HyRouteRecordVPNError(journal, startError.journalEvent, source, Int32(clamping: detail.code))
+            completionHandler(startError)
           }
         }
       }
@@ -117,9 +123,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     return settings
   }
 
-  private enum TunnelError: Int, Error {
-    case configuration, engine, cancelled
-  }
 }
 
 // Xray reads datagrams with Darwin's four-byte utun address-family header.

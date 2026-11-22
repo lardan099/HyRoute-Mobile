@@ -129,6 +129,8 @@ jobs:
         run: |
           swiftc -o "$RUNNER_TEMP/hyroute-state-test" Native/Models.swift NativeTests/StateCompatibility.swift
           "$RUNNER_TEMP/hyroute-state-test"
+          swiftc -o "$RUNNER_TEMP/hyroute-startup-test" Native/VPNStartup.swift NativeTests/VPNStartupTests.swift
+          "$RUNNER_TEMP/hyroute-startup-test"
       - name: Build unsigned iPhone IPA
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios

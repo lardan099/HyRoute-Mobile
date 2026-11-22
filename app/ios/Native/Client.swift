@@ -2,7 +2,7 @@ import Foundation
 import NetworkExtension
 import SwiftUI
 
-private enum CoreError: Error { case invalidResult }
+private enum CoreError: Error { case invalidResult, missingTunnelExtension }
 
 private actor NativeCore {
   private let store = ClientStore()
@@ -22,6 +22,10 @@ private actor NativeCore {
 
   func record(_ event: String) {
     if let path = try? journalPath() { HyRouteRecordVPNEvent(path, event) }
+  }
+
+  func recordVPNError(_ event: String, source: String, code: Int32) {
+    if let path = try? journalPath() { HyRouteRecordVPNError(path, event, source, code) }
   }
 
   func journal() throws -> [String] {
@@ -68,7 +72,10 @@ private actor NativeCore {
 final class Client: ObservableObject {
   private let core = NativeCore()
   private var manager: NETunnelProviderManager?
-  private var startingVPN = false
+  private var startup: (state: VPNStartup, began: ContinuousClock.Instant)?
+  private var watchdog: Task<Void, Never>?
+  private var attemptID = UUID()
+  private var stoppingVPN = false
   @Published private(set) var state = ClientState()
   @Published private(set) var ready = false
   @Published private(set) var busy = false
@@ -77,17 +84,22 @@ final class Client: ObservableObject {
   @Published var error: String?
 
   func load() async {
-    if await change("Не удалось открыть хранилище HyRoute.", { try await self.core.load() }) {
-      ready = true
-      manager = try? await vpnManager()
+    if await change("Не удалось открыть хранилище HyRoute.", {
+      let snapshot = try await self.core.load()
+      self.manager = try? await self.vpnManager()
+      return snapshot
+    }) {
       syncVPNStatus()
+      ready = true
     }
   }
 
   func toggleVPN() async {
-    guard !vpnBusy else { return }
+    guard !vpnBusy, !stoppingVPN else { return }
+    attemptID = UUID()
     if vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting {
-      startingVPN = false
+      finishStartup()
+      stoppingVPN = true
       (manager?.connection as? NETunnelProviderSession)?.stopTunnel()
       await core.record("vpn_stop")
       syncVPNStatus()
@@ -98,25 +110,36 @@ final class Client: ObservableObject {
     defer { vpnBusy = false }
     await core.record("vpn_request")
     do {
-      let current = try await vpnManager()
-      if !current.isEnabled {
-        await core.record("vpn_permission")
-        current.isEnabled = true
-        try await current.saveToPreferences()
-        try await current.loadFromPreferences()
-      }
-      manager = current
-      guard let session = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
-      startingVPN = true
       let snapshot = try await core.vpnState()
-      try session.startTunnel(options: ["state": snapshot as NSString])
-      syncVPNStatus()
+      do {
+        try await requestTunnel(snapshot)
+      } catch let error as NEVPNError where error.code == .configurationStale {
+        await core.record("vpn_preferences_stale")
+        try await requestTunnel(snapshot)
+      }
+      watchStartup()
+      await core.record("vpn_handoff")
+    } catch CoreError.missingTunnelExtension {
+      await core.record("vpn_provider_missing")
+      error = "В установленной сборке нет Packet Tunnel. При подписи IPA сохраните VPN-расширение."
     } catch {
-      startingVPN = false
-      await core.record("vpn_system_error")
-      self.error = "Не удалось запустить VPN. Проверьте разрешение iOS и выбранный профиль."
+      await logVPNError(error, event: "vpn_system_error")
+      self.error = "iOS отклонила запуск VPN. Код \((error as NSError).code). Подробности в журнале."
       syncVPNStatus()
     }
+  }
+
+  private func requestTunnel(_ snapshot: String) async throws {
+    let current = try await vpnManager()
+    if !current.isEnabled {
+      await core.record("vpn_permission")
+      current.isEnabled = true
+      try await current.saveToPreferences()
+      try await current.loadFromPreferences()
+    }
+    manager = current
+    guard let session = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
+    try session.startTunnel(options: ["state": snapshot as NSString])
   }
 
   func journal() async throws -> [String] { try await core.journal() }
@@ -129,23 +152,91 @@ final class Client: ObservableObject {
   }
 
   func syncVPNStatus() {
-    guard let status = manager?.connection.status else { return }
-    if status == .connected {
-      startingVPN = false
-    } else if startingVPN && vpnStatus == .connecting && (status == .disconnected || status == .invalid) {
-      startingVPN = false
-      error = "VPN не подключился. Проверьте профиль и установленные базы правил."
+    guard let connection = manager?.connection else { return }
+    let status = connection.status
+    if var observation = startup {
+      let outcome = observation.state.observe(status, elapsed: observation.began.duration(to: .now))
+      startup = observation
+      if outcome == .waiting {
+        vpnStatus = .connecting
+        return
+      }
+      finishStartup()
+      if outcome == .rejected {
+        reportDisconnect(connection, event: "vpn_start_failed", message: "iOS отключила VPN во время запуска. Подробности в журнале.")
+      } else if outcome == .timedOut {
+        stoppingVPN = true
+        connection.stopVPNTunnel()
+        error = "VPN не запустился за 35 секунд."
+        Task { await core.record("vpn_start_timeout") }
+      }
+    } else if status == .disconnected || status == .invalid {
+      if !stoppingVPN && (vpnStatus == .connected || vpnStatus == .reasserting) {
+        reportDisconnect(connection, event: "vpn_disconnect", message: "iOS отключила активный VPN. Подробности в журнале.")
+      }
+      stoppingVPN = false
     }
-    vpnStatus = status
+    vpnStatus = stoppingVPN ? .disconnecting : status
+  }
+
+  private func watchStartup() {
+    finishStartup()
+    startup = (VPNStartup(), .now)
+    watchdog = Task { [weak self] in
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+        guard let self, self.startup != nil else { return }
+        self.syncVPNStatus()
+      }
+    }
+    syncVPNStatus()
+  }
+
+  private func finishStartup() {
+    startup = nil
+    watchdog?.cancel()
+    watchdog = nil
+  }
+
+  private func reportDisconnect(_ connection: NEVPNConnection, event: String, message: String) {
+    error = message
+    let attempt = attemptID
+    Task { [weak self] in
+      guard let self else { return }
+      await self.core.record(event)
+      do {
+        try await connection.fetchLastDisconnectError()
+      } catch {
+        await self.logVPNError(error, event: "vpn_ios_error")
+        guard self.attemptID == attempt, self.vpnStatus != .connected else { return }
+        let detail = error as NSError
+        if detail.domain == TunnelStartError.errorDomain,
+           let tunnelError = TunnelStartError(rawValue: detail.code) {
+          self.error = tunnelError.userMessage
+        } else {
+          self.error = message + " Код \(detail.code)."
+        }
+      }
+    }
+  }
+
+  private func logVPNError(_ error: Error, event: String) async {
+    let detail = error as NSError
+    let source = detail.domain == TunnelStartError.errorDomain ? "PacketTunnel" : detail.domain
+    await core.recordVPNError(event, source: source, code: Int32(clamping: detail.code))
   }
 
   private func vpnManager() async throws -> NETunnelProviderManager {
-    guard let bundleID = Bundle.main.bundleIdentifier else { throw CoreError.invalidResult }
-    let providerID = bundleID + ".PacketTunnel"
+    guard let url = Bundle.main.builtInPlugInsURL?.appendingPathComponent("HyRouteTunnel.appex"),
+          let tunnelBundle = Bundle(url: url),
+          let providerID = tunnelBundle.bundleIdentifier else { throw CoreError.missingTunnelExtension }
     let managers = try await NETunnelProviderManager.loadAllFromPreferences()
     if let installed = managers.first(where: {
       ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerID
-    }) { return installed }
+    }) {
+      try await installed.loadFromPreferences()
+      return installed
+    }
     let configuration = NETunnelProviderProtocol()
     configuration.providerBundleIdentifier = providerID
     configuration.serverAddress = "HyRoute"

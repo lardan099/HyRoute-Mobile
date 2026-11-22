@@ -111,7 +111,12 @@ struct VPNJournalPage: View {
     }
     .navigationTitle("Журнал VPN")
     .refreshable { await load() }
-    .task { await load() }
+    .task {
+      while !Task.isCancelled {
+        await load()
+        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+      }
+    }
     .toolbar {
       Button { UIPasteboard.general.string = lines.joined(separator: "\n") } label: {
         Label("Копировать журнал", systemImage: "doc.on.doc")

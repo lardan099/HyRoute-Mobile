@@ -40,17 +40,15 @@ BOOL HyRouteUpdateGeo(void) {
     return MobileUpdateGeo(&error);
 }
 
-NSObject * _Nullable HyRoutePrepareVPN(NSString *state, NSString *geoDirectory, NSString *journal) {
+NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory) {
     MobileConfigureGeo(geoDirectory);
     NSError *error = nil;
-    MobileVPNPlan *plan = MobileNewVPNPlan(state, NO, &error);
-    if (plan == nil) {
-        MobileRecordVPNEvent(journal, @"vpn_plan_error");
-        return nil;
-    }
-    MobileVPNPrepared *prepared = [plan prepare:&error];
-    if (prepared == nil) MobileRecordVPNEvent(journal, @"vpn_prepare_error");
-    return prepared;
+    return MobileNewVPNPlan(state, NO, &error);
+}
+
+NSObject * _Nullable HyRoutePrepareVPN(NSObject *plan) {
+    NSError *error = nil;
+    return [(MobileVPNPlan *)plan prepare:&error];
 }
 
 NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd) {
@@ -64,6 +62,10 @@ void HyRouteStopVPN(NSObject *session) {
 
 void HyRouteRecordVPNEvent(NSString *path, NSString *event) {
     MobileRecordVPNEvent(path, event);
+}
+
+void HyRouteRecordVPNError(NSString *path, NSString *event, NSString *source, int32_t code) {
+    MobileRecordVPNError(path, event, source, code);
 }
 
 NSString *HyRouteVPNJournal(NSString *appPath, NSString *tunnelPath) {
