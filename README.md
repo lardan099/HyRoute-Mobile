@@ -38,4 +38,5 @@ flutter run -d chrome
 пока хранятся в памяти на время работы приложения.
 
 Для тестовой сборки включите `build_apps` в workflow **Mobile Go bindings**.
-Он выдаст APK для Android и архив приложения для симулятора iOS.
+Для сборки одной платформы укажите её в поле `platform`. Workflow выдаёт
+APK для Android и IPA для iPhone. Для установки IPA требуется подпись Apple.
