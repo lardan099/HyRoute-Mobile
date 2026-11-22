@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hyroute_mobile/core.dart';
 import 'package:hyroute_mobile/main.dart';
@@ -8,6 +9,7 @@ import 'package:hyroute_mobile/main.dart';
 class _TestCore implements ClientCore {
   String? configuration;
   String? input;
+  bool rejectSave = false;
   var state = const ClientState();
 
   @override
@@ -21,6 +23,11 @@ class _TestCore implements ClientCore {
 
   @override
   Future<void> updateGeo() async {}
+
+  @override
+  Future<Map<String, String>> launchableApps() async => {
+    'org.example.app': 'Тестовый браузер',
+  };
 
   @override
   Future<ClientState> refreshSubscription(String id) async {
@@ -67,6 +74,7 @@ class _TestCore implements ClientCore {
 
   @override
   Future<void> saveSettings(ClientSettings settings) async {
+    if (rejectSave) throw PlatformException(code: 'core');
     configuration = jsonEncode(settings.toJson()['routing']);
     state = ClientState(subscriptions: state.subscriptions, settings: settings);
   }
@@ -133,11 +141,49 @@ void main() {
     final core = await _openApp(tester);
     await _tap(tester, 'Правила');
     await _tap(tester, 'Добавить правило');
-    await _tap(tester, 'Выбрать GeoSite или GeoIP');
+    await _tap(tester, 'Готовый список');
     await _tap(tester, 'geosite:youtube');
     await _tap(tester, 'Сохранить');
     expect(jsonDecode(core.configuration!)['rules'].single['domains'], [
       'geosite:youtube',
+    ]);
+  });
+
+  testWidgets('uses the host of a pasted URL and keeps the draft on failure', (
+    tester,
+  ) async {
+    final core = await _openApp(tester);
+    await _tap(tester, 'Правила');
+    await _tap(tester, 'Добавить правило');
+    final input = find.byType(TextField).first;
+    await tester.enterText(input, 'https://example.org/page?token=test');
+    await tester.pumpAndSettle();
+    expect(find.text('В правило попадёт: example.org'), findsOneWidget);
+    await _tap(tester, 'Напрямую');
+    core.rejectSave = true;
+    await _tap(tester, 'Сохранить');
+    expect(
+      tester.widget<TextField>(input).controller!.text,
+      'https://example.org/page?token=test',
+    );
+    expect(find.textContaining('Проверьте сайт'), findsOneWidget);
+    core.rejectSave = false;
+    await _tap(tester, 'Сохранить');
+    expect(jsonDecode(core.configuration!)['rules'].single, {
+      'action': 'direct',
+      'domains': ['example.org'],
+    });
+  });
+
+  testWidgets('adds an Android rule by app name', (tester) async {
+    final core = await _openApp(tester);
+    await _tap(tester, 'Правила');
+    await _tap(tester, 'Добавить правило');
+    await _tap(tester, 'Приложение');
+    await _tap(tester, 'Тестовый браузер');
+    await _tap(tester, 'Сохранить');
+    expect(jsonDecode(core.configuration!)['rules'].single['apps'], [
+      {'kind': 'package', 'pattern': 'org.example.app'},
     ]);
   });
 
@@ -219,7 +265,9 @@ void main() {
     );
     await tester.pumpAndSettle();
     await _tap(tester, 'Только выбранные');
-    await tester.enterText(find.byType(TextField), 'org.example.app');
+    await _tap(tester, 'Выбрать приложения');
+    await _tap(tester, 'Тестовый браузер');
+    await _tap(tester, 'Готово (1)');
     await _tap(tester, 'Сохранить');
     expect(find.text('Только выбранные'), findsOneWidget);
 

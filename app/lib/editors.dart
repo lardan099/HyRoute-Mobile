@@ -1,11 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'core.dart';
 
 final _packageId = RegExp(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$');
 
+String geoListName(String tag) => switch (tag) {
+  'geosite:youtube' => 'YouTube',
+  'geosite:telegram' => 'Telegram',
+  'geosite:discord' => 'Discord',
+  'geosite:category-ads-all' => 'Реклама',
+  'geoip:ru' => 'IP России',
+  'geoip:private' => 'Локальная сеть',
+  _ => tag,
+};
+
 class SubscriptionEditor extends StatefulWidget {
-  const SubscriptionEditor({super.key});
+  const SubscriptionEditor({super.key, required this.onImport});
+
+  final Future<String?> Function(String) onImport;
 
   @override
   State<SubscriptionEditor> createState() => _SubscriptionEditorState();
@@ -13,6 +26,25 @@ class SubscriptionEditor extends StatefulWidget {
 
 class _SubscriptionEditorState extends State<SubscriptionEditor> {
   final _input = TextEditingController();
+  var _busy = false;
+  String? _error;
+
+  Future<void> _submit() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final error = await widget.onImport(_input.text.trim());
+    if (!mounted) return;
+    if (error == null) {
+      Navigator.pop(context);
+    } else {
+      setState(() {
+        _busy = false;
+        _error = error;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -24,29 +56,54 @@ class _SubscriptionEditorState extends State<SubscriptionEditor> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Добавить подписку'),
-      content: TextField(
-        controller: _input,
-        autofocus: true,
-        autocorrect: false,
-        enableSuggestions: false,
-        minLines: 3,
-        maxLines: 6,
-        onChanged: (_) => setState(() {}),
-        decoration: const InputDecoration(
-          labelText: 'Подписка или ссылки серверов',
-          hintText: 'https://…',
-          alignLabelWithHint: true,
-        ),
+      scrollable: true,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _input,
+            enabled: !_busy,
+            autocorrect: false,
+            enableSuggestions: false,
+            minLines: 3,
+            maxLines: 6,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              labelText: 'Ссылка или конфиг',
+              hintText: 'https://…',
+              alignLabelWithHint: true,
+            ),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.content_paste_rounded),
+            label: const Text('Вставить из буфера'),
+            onPressed: _busy
+                ? null
+                : () async {
+                    final text = (await Clipboard.getData(
+                      Clipboard.kTextPlain,
+                    ))?.text;
+                    if (mounted && text != null) {
+                      setState(() => _input.text = text);
+                    }
+                  },
+          ),
+          if (_busy) const LinearProgressIndicator(),
+          if (_error != null)
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+        ],
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _busy ? null : () => Navigator.pop(context),
           child: const Text('Отмена'),
         ),
         FilledButton(
-          onPressed: _input.text.trim().isEmpty
-              ? null
-              : () => Navigator.pop(context, _input.text.trim()),
+          onPressed: _busy || _input.text.trim().isEmpty ? null : _submit,
           child: const Text('Импортировать'),
         ),
       ],
@@ -60,6 +117,9 @@ class RuleEditor extends StatefulWidget {
     required this.servers,
     required this.android,
     required this.pickGeoTag,
+    required this.pickProfile,
+    required this.save,
+    this.pickApp,
     this.destination,
     this.initial,
   });
@@ -67,6 +127,9 @@ class RuleEditor extends StatefulWidget {
   final List<Server> servers;
   final bool android;
   final Future<String?> Function() pickGeoTag;
+  final Future<String?> Function(String) pickProfile;
+  final Future<String?> Function(RouteRule) save;
+  final Future<MapEntry<String, String>?> Function()? pickApp;
   final String? destination;
   final RouteRule? initial;
 
@@ -119,9 +182,15 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final matches = _tags.where((tag) => tag.contains(_query)).toList();
+    final matches = _tags
+        .where(
+          (tag) =>
+              tag.contains(_query) ||
+              geoListName(tag).toLowerCase().contains(_query),
+        )
+        .toList();
     return AlertDialog(
-      title: const Text('GeoSite и GeoIP'),
+      title: const Text('Готовые списки'),
       content: SizedBox(
         width: 400,
         height: 300,
@@ -137,7 +206,10 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
                 autocorrect: false,
                 onChanged: (value) =>
                     setState(() => _query = value.trim().toLowerCase()),
-                decoration: const InputDecoration(labelText: 'Поиск категории'),
+                decoration: const InputDecoration(
+                  labelText: 'Найти список',
+                  hintText: 'YouTube',
+                ),
               ),
               Expanded(
                 child: matches.isEmpty
@@ -146,7 +218,11 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
                         itemCount: matches.length,
                         itemBuilder: (context, index) => ListTile(
                           dense: true,
-                          title: Text(matches[index]),
+                          title: Text(geoListName(matches[index])),
+                          subtitle:
+                              geoListName(matches[index]) == matches[index]
+                              ? null
+                              : Text(matches[index]),
                           onTap: () => Navigator.pop(context, matches[index]),
                         ),
                       ),
@@ -179,7 +255,10 @@ class _RuleEditorState extends State<RuleEditor> {
   late RouteAction _action = widget.initial?.action ?? RouteAction.tunnel;
   late String _server = widget.initial?.server ?? '';
   late String _protocol = widget.initial?.protocol ?? '';
+  late bool _advanced = _port.text.isNotEmpty || _protocol.isNotEmpty;
+  String? _appName;
   String? _error;
+  var _saving = false;
 
   @override
   void dispose() {
@@ -189,144 +268,241 @@ class _RuleEditorState extends State<RuleEditor> {
     super.dispose();
   }
 
-  void _save() {
-    final destination = _destination.text.trim();
+  Future<void> _save() async {
+    final destinations = ruleDestinations(_destination.text);
     final port = _port.text.trim();
     final package = widget.android ? _package.text.trim() : '';
-    if (destination.isEmpty &&
+    if (destinations.isEmpty &&
         port.isEmpty &&
         package.isEmpty &&
         _protocol.isEmpty) {
-      setState(
-        () => _error = 'Укажите домен, IP, порт, протокол или приложение.',
-      );
+      setState(() => _error = 'Введите сайт или выберите готовый список.');
       return;
     }
     if (package.isNotEmpty && !_packageId.hasMatch(package)) {
-      setState(() => _error = 'Проверьте идентификатор пакета Android.');
+      setState(() => _error = 'Проверьте идентификатор приложения Android.');
       return;
     }
-    Navigator.pop(
-      context,
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final error = await widget.save(
       RouteRule(
         action: _action,
-        destination: destination,
+        destination: destinations.join('\n'),
         port: port,
         package: package,
         server: _action == RouteAction.tunnel ? _server : '',
         protocol: _protocol,
       ),
     );
+    if (!mounted) return;
+    if (error == null) {
+      Navigator.pop(context);
+    } else {
+      setState(() {
+        _saving = false;
+        _error = error;
+      });
+    }
   }
 
-  Future<void> _addGeoTag() async {
-    final tag = await widget.pickGeoTag();
-    if (!mounted || tag == null) return;
-    final current = _destination.text.trim();
-    if (current.split('\n').any((line) => line.trim() == tag)) return;
-    _destination.text = current.isEmpty ? tag : '$current\n$tag';
+  void _appendDestination(String? value) {
+    if (!mounted || value == null || value.trim().isEmpty) return;
+    setState(() {
+      _destination.text = ruleDestinations(
+        '${_destination.text}\n$value',
+      ).join('\n');
+      _error = null;
+    });
+  }
+
+  Future<void> _chooseApp() async {
+    final app = await widget.pickApp?.call();
+    if (!mounted || app == null) return;
+    setState(() {
+      _package.text = app.key;
+      _appName = app.value;
+      _error = null;
+    });
+  }
+
+  Future<void> _chooseProfile() async {
+    final id = await widget.pickProfile(_server);
+    if (mounted && id != null) setState(() => _server = id);
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final profile = widget.servers
+        .where((server) => server.id == _server)
+        .firstOrNull;
+    final destinations = ruleDestinations(_destination.text);
+    final hasURL =
+        destinations.join('\n') != _destination.text.trim() &&
+        RegExp(
+          r'^https?://',
+          multiLine: true,
+          caseSensitive: false,
+        ).hasMatch(_destination.text);
     return AlertDialog(
       scrollable: true,
       title: Text(widget.initial == null ? 'Новое правило' : 'Правило'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text('Что направить?', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 10),
           TextField(
             controller: _destination,
+            enabled: !_saving,
             autocorrect: false,
-            minLines: 2,
+            enableSuggestions: false,
+            minLines: 1,
             maxLines: 4,
+            onChanged: (_) => setState(() => _error = null),
             decoration: const InputDecoration(
-              labelText: 'Домены, IP и категории',
-              hintText: '.example.org',
-              helperText: 'По одному на строку',
+              labelText: 'Сайт, ссылка или IP',
+              hintText: 'youtube.com',
             ),
           ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: _addGeoTag,
-              icon: const Icon(Icons.public_rounded),
-              label: const Text('Выбрать GeoSite или GeoIP'),
+          if (hasURL)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text('В правило попадёт: ${destinations.join(', ')}'),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _port,
-            keyboardType: TextInputType.text,
-            decoration: const InputDecoration(
-              labelText: 'Порт или диапазон',
-              hintText: '443',
-            ),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: _protocol,
-            decoration: const InputDecoration(labelText: 'Протокол'),
-            items: const [
-              DropdownMenuItem(value: '', child: Text('Любой')),
-              DropdownMenuItem(value: 'tcp', child: Text('TCP')),
-              DropdownMenuItem(value: 'udp', child: Text('UDP')),
+          Wrap(
+            spacing: 8,
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.content_paste_rounded, size: 18),
+                label: const Text('Вставить'),
+                onPressed: _saving
+                    ? null
+                    : () async {
+                        _appendDestination(
+                          (await Clipboard.getData(Clipboard.kTextPlain))?.text,
+                        );
+                      },
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.public_rounded, size: 18),
+                label: const Text('Готовый список'),
+                onPressed: _saving
+                    ? null
+                    : () async => _appendDestination(await widget.pickGeoTag()),
+              ),
+              if (widget.pickApp != null)
+                TextButton.icon(
+                  icon: const Icon(Icons.apps_rounded, size: 18),
+                  label: const Text('Приложение'),
+                  onPressed: _saving ? null : _chooseApp,
+                ),
             ],
-            onChanged: (value) => _protocol = value!,
           ),
-          if (widget.android) ...[
-            const SizedBox(height: 12),
+          if (_package.text.isNotEmpty)
+            InputChip(
+              label: Text(_appName ?? _package.text),
+              onDeleted: _saving
+                  ? null
+                  : () => setState(() {
+                      _package.clear();
+                      _appName = null;
+                    }),
+            ),
+          const SizedBox(height: 14),
+          Text('Куда?', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 7,
+            runSpacing: 2,
+            children: [
+              for (final action in RouteAction.values)
+                ChoiceChip(
+                  label: Text(action.label),
+                  selected: _action == action,
+                  onSelected: _saving
+                      ? null
+                      : (_) => setState(() => _action = action),
+                ),
+            ],
+          ),
+          Text(_action.help, style: theme.textTheme.bodySmall),
+          if (_action == RouteAction.tunnel)
+            TextButton.icon(
+              icon: const Icon(Icons.dns_outlined),
+              label: Text(
+                profile?.name ??
+                    (_server.isEmpty
+                        ? 'Основной профиль'
+                        : 'Профиль недоступен'),
+              ),
+              onPressed: _saving ? null : _chooseProfile,
+            ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            icon: Icon(_advanced ? Icons.expand_less : Icons.expand_more),
+            label: const Text('Дополнительные условия'),
+            onPressed: _saving
+                ? null
+                : () => setState(() => _advanced = !_advanced),
+          ),
+          if (_advanced) ...[
             TextField(
-              controller: _package,
-              autocorrect: false,
+              controller: _port,
+              enabled: !_saving,
               decoration: const InputDecoration(
-                labelText: 'Пакет Android',
-                hintText: 'org.example.app',
+                labelText: 'Порт или диапазон',
+                hintText: '443',
               ),
             ),
-          ],
-          const SizedBox(height: 12),
-          DropdownButtonFormField<RouteAction>(
-            initialValue: _action,
-            decoration: const InputDecoration(labelText: 'Действие'),
-            items: RouteAction.values
-                .map(
-                  (action) => DropdownMenuItem(
-                    value: action,
-                    child: Text(action.label),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) => setState(() => _action = value!),
-          ),
-          if (_action == RouteAction.tunnel) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             DropdownButtonFormField<String>(
-              isExpanded: true,
-              initialValue: _server,
-              decoration: const InputDecoration(labelText: 'VPN-профиль'),
-              items: serverItems(
-                widget.servers,
-                emptyLabel: 'Основной профиль',
+              initialValue: _protocol,
+              decoration: const InputDecoration(labelText: 'Протокол'),
+              items: const [
+                DropdownMenuItem(value: '', child: Text('Любой')),
+                DropdownMenuItem(value: 'tcp', child: Text('TCP')),
+                DropdownMenuItem(value: 'udp', child: Text('UDP')),
+              ],
+              onChanged: _saving ? null : (value) => _protocol = value!,
+            ),
+            if (widget.android) ...[
+              const SizedBox(height: 10),
+              TextField(
+                controller: _package,
+                enabled: !_saving,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Идентификатор приложения',
+                  hintText: 'org.example.app',
+                ),
+                onChanged: (_) => setState(() => _appName = null),
               ),
-              onChanged: (value) => setState(() => _server = value!),
-            ),
+            ],
           ],
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                _error!,
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
             ),
-          ],
         ],
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _saving ? null : () => Navigator.pop(context),
           child: const Text('Отмена'),
         ),
-        FilledButton(onPressed: _save, child: const Text('Сохранить')),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Сохранение…' : 'Сохранить'),
+        ),
       ],
     );
   }
@@ -407,11 +583,121 @@ class _ChainEditorState extends State<ChainEditor> {
   }
 }
 
+class AppPicker extends StatefulWidget {
+  const AppPicker({super.key, required this.core, this.existing});
+
+  final ClientCore core;
+  final List<String>? existing;
+
+  @override
+  State<AppPicker> createState() => _AppPickerState();
+}
+
+class _AppPickerState extends State<AppPicker> {
+  late final _load = widget.core.launchableApps();
+  late final _selected = {...?widget.existing};
+  var _query = '';
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(
+      widget.existing == null ? 'Выбрать приложение' : 'Выбрать приложения',
+    ),
+    content: SizedBox(
+      width: 400,
+      height: 330,
+      child: Column(
+        children: [
+          TextField(
+            decoration: const InputDecoration(labelText: 'Найти приложение'),
+            onChanged: (value) =>
+                setState(() => _query = value.trim().toLowerCase()),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: FutureBuilder<Map<String, String>>(
+              future: _load,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return const Center(
+                    child: Text('Не удалось открыть список приложений.'),
+                  );
+                }
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final apps =
+                    snapshot.data!.entries
+                        .where(
+                          (app) =>
+                              app.value.toLowerCase().contains(_query) ||
+                              app.key.toLowerCase().contains(_query),
+                        )
+                        .toList()
+                      ..sort(
+                        (a, b) => a.value.toLowerCase().compareTo(
+                          b.value.toLowerCase(),
+                        ),
+                      );
+                if (apps.isEmpty) {
+                  return const Center(child: Text('Приложение не найдено.'));
+                }
+                return ListView.builder(
+                  itemCount: apps.length,
+                  itemBuilder: (context, index) {
+                    final app = apps[index];
+                    if (widget.existing == null) {
+                      return ListTile(
+                        title: Text(app.value),
+                        onTap: () => Navigator.pop(context, [app]),
+                      );
+                    }
+                    return CheckboxListTile(
+                      title: Text(app.value),
+                      value: _selected.contains(app.key),
+                      onChanged: (value) => setState(() {
+                        if (value == true) {
+                          _selected.add(app.key);
+                        } else {
+                          _selected.remove(app.key);
+                        }
+                      }),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Отмена'),
+      ),
+      if (widget.existing != null)
+        FilledButton(
+          onPressed: () => Navigator.pop(context, [
+            for (final id in _selected) MapEntry(id, id),
+          ]),
+          child: Text('Готово (${_selected.length})'),
+        ),
+    ],
+  );
+}
+
 class ScopeEditor extends StatefulWidget {
-  const ScopeEditor({super.key, required this.scope, required this.packages});
+  const ScopeEditor({
+    super.key,
+    required this.scope,
+    required this.packages,
+    required this.pickApps,
+  });
 
   final AppScope scope;
   final List<String> packages;
+  final Future<List<MapEntry<String, String>>?> Function(List<String>) pickApps;
 
   @override
   State<ScopeEditor> createState() => _ScopeEditorState();
@@ -423,6 +709,13 @@ class _ScopeEditorState extends State<ScopeEditor> {
     text: widget.packages.join('\n'),
   );
   String? _error;
+  bool _manual = false;
+
+  List<String> get _selection => _packages.text
+      .split(RegExp(r'[\s,]+'))
+      .where((item) => item.isNotEmpty)
+      .toSet()
+      .toList();
 
   @override
   void dispose() {
@@ -472,17 +765,40 @@ class _ScopeEditorState extends State<ScopeEditor> {
           ),
           if (_scope != AppScope.all) ...[
             const SizedBox(height: 12),
-            TextField(
-              controller: _packages,
-              minLines: 2,
-              maxLines: 5,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: const InputDecoration(
-                labelText: 'Пакеты Android, по одному на строку',
-                hintText: 'org.example.app',
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.apps_rounded),
+              label: Text(
+                _selection.isEmpty
+                    ? 'Выбрать приложения'
+                    : 'Выбрано: ${_selection.length}',
               ),
+              onPressed: () async {
+                final apps = await widget.pickApps(_selection);
+                if (mounted && apps != null) {
+                  setState(() {
+                    _packages.text = apps.map((app) => app.key).join('\n');
+                    _error = null;
+                  });
+                }
+              },
             ),
+            TextButton(
+              onPressed: () => setState(() => _manual = !_manual),
+              child: const Text('Указать идентификаторы вручную'),
+            ),
+            if (_manual)
+              TextField(
+                controller: _packages,
+                minLines: 2,
+                maxLines: 5,
+                autocorrect: false,
+                enableSuggestions: false,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Пакеты Android, по одному на строку',
+                  hintText: 'org.example.app',
+                ),
+              ),
           ],
           if (_error != null) ...[
             const SizedBox(height: 12),

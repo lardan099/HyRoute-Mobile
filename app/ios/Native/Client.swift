@@ -61,8 +61,8 @@ final class Client: ObservableObject {
     }
   }
 
-  func importSubscription(_ input: String) async -> Bool {
-    await change("Не удалось импортировать подписку. Проверьте ссылку или формат.") {
+  func importSubscription(_ input: String, reportError: Bool = true) async -> Bool {
+    await change("Не удалось импортировать подписку. Проверьте ссылку или формат.", reportError: reportError) {
       try await self.core.importSubscription(input.trimmingCharacters(in: .whitespacesAndNewlines))
     }
   }
@@ -79,24 +79,24 @@ final class Client: ObservableObject {
     return await save(next)
   }
 
-  func saveRouting(_ routing: Routing) async -> Bool {
+  func saveRouting(_ routing: Routing, reportError: Bool = true) async -> Bool {
     var next = state.settings
     next.routing = routing
     next.selected = state.selected?.id
-    return await save(next)
+    return await save(next, reportError: reportError)
   }
 
   func geoTags(update: Bool) async throws -> [String] {
     try await core.geoTags(update: update)
   }
 
-  private func save(_ settings: ClientSettings) async -> Bool {
-    await change("Не удалось сохранить. Проверьте адреса, порты и цепочки профилей.") {
+  private func save(_ settings: ClientSettings, reportError: Bool = true) async -> Bool {
+    await change("Не удалось сохранить. Проверьте адреса, порты и цепочки профилей.", reportError: reportError) {
       try await self.core.save(settings)
     }
   }
 
-  private func change(_ failure: String, _ operation: () async throws -> ClientState) async -> Bool {
+  private func change(_ failure: String, reportError: Bool = true, _ operation: () async throws -> ClientState) async -> Bool {
     guard !busy else { return false }
     busy = true
     defer { busy = false }
@@ -104,7 +104,7 @@ final class Client: ObservableObject {
       state = try await operation()
       return true
     } catch {
-      self.error = failure
+      if reportError { self.error = failure }
       return false
     }
   }

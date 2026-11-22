@@ -70,16 +70,23 @@ class _HomeState extends State<Home> {
     ];
   }
 
-  Future<void> _chooseProfile(List<Server> servers) async {
-    final id = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      builder: (_) => _ProfilePicker(servers: servers, selected: _selected),
-    );
+  Future<void> _chooseProfile() async {
+    final id = await _pickProfile(_selected);
     if (mounted && id != null) await _saveSettings(selected: id);
   }
+
+  Future<String?> _pickProfile(String? selected, {bool useMain = false}) =>
+      showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        showDragHandle: true,
+        builder: (_) => _ProfilePicker(
+          servers: _servers,
+          selected: selected,
+          useMain: useMain,
+        ),
+      );
 
   String _serverName(String id) {
     for (final server in _servers) {
@@ -96,53 +103,59 @@ class _HomeState extends State<Home> {
 
   Future<void> _import() async {
     if (_importing || _validating) return;
-    final input = await showDialog<String>(
+    await showDialog<void>(
       context: context,
-      builder: (_) => const SubscriptionEditor(),
+      barrierDismissible: false,
+      builder: (_) => SubscriptionEditor(
+        onImport: (input) =>
+            _updateSubscriptions(() => widget.core.importSubscription(input)),
+      ),
     );
-    if (!mounted || input == null) return;
-    await _updateSubscriptions(() => widget.core.importSubscription(input));
   }
 
-  Future<void> _updateSubscriptions(
+  Future<String?> _updateSubscriptions(
     Future<ClientState> Function() update, {
     bool refresh = false,
   }) async {
-    if (_importing || _validating) return;
+    if (_importing || _validating) return 'Дождитесь завершения загрузки.';
     setState(() => _importing = true);
     try {
       final state = await update();
-      if (!mounted) return;
-      setState(() => _restore(state));
-      if (refresh) _notify('Подписка обновлена.');
+      if (mounted) setState(() => _restore(state));
+      return null;
     } on MissingPluginException {
-      if (mounted) _notify('Для импорта нужна сборка с мобильным ядром.');
+      return 'Для импорта нужна сборка с мобильным ядром.';
     } on PlatformException catch (error) {
-      if (mounted) {
-        _notify(
-          error.code == 'storage'
-              ? 'Подписку не удалось сохранить. Проверьте хранилище устройства.'
-              : refresh
-              ? 'Подписку не удалось обновить. Сохранён предыдущий список.'
-              : 'Импорт не удался. Проверьте ссылку или формат подписки.',
-        );
-      }
+      return error.code == 'storage'
+          ? 'Подписку не удалось сохранить. Проверьте хранилище устройства.'
+          : refresh
+          ? 'Подписку не удалось обновить. Сохранён предыдущий список.'
+          : 'Импорт не удался. Проверьте ссылку или формат подписки.';
     } on FormatException {
-      if (mounted) _notify('Импорт не вернул серверы.');
+      return 'В подписке не нашлось серверов.';
     } finally {
       if (mounted) setState(() => _importing = false);
     }
   }
 
-  Future<void> _saveSettings({
+  Future<void> _refresh(String id) async {
+    final error = await _updateSubscriptions(
+      () => widget.core.refreshSubscription(id),
+      refresh: true,
+    );
+    if (mounted) _notify(error ?? 'Подписка обновлена.');
+  }
+
+  Future<String?> _saveSettings({
     List<RouteRule>? rules,
     RouteAction? defaultAction,
     Map<String, String>? via,
     String? selected,
     AppScope? scope,
     List<String>? packages,
+    bool inline = false,
   }) async {
-    if (_validating || _importing) return;
+    if (_validating || _importing) return 'Дождитесь завершения загрузки.';
     final next = ClientSettings(
       rules: rules ?? _rules,
       defaultAction: defaultAction ?? _defaultAction,
@@ -154,49 +167,64 @@ class _HomeState extends State<Home> {
     setState(() => _validating = true);
     try {
       await widget.core.saveSettings(next);
-      if (!mounted) return;
-      setState(
-        () => _restore(
-          ClientState(subscriptions: _subscriptions, settings: next),
-        ),
-      );
-    } on PlatformException catch (error) {
       if (mounted) {
-        _notify(
-          error.code == 'storage'
-              ? 'Не удалось сохранить настройки.'
-              : 'Проверьте адрес, порт и VPN-профиль в правиле.',
+        setState(
+          () => _restore(
+            ClientState(subscriptions: _subscriptions, settings: next),
+          ),
         );
       }
+      return null;
+    } on PlatformException catch (error) {
+      final message = error.code == 'storage'
+          ? 'Не удалось сохранить настройки.'
+          : 'Проверьте сайт, IP и порт. Для готового списка нужны базы правил.';
+      if (!inline && mounted) _notify(message);
+      return message;
     } on MissingPluginException {
-      if (mounted) {
-        _notify('Для проверки правил нужна сборка с мобильным ядром.');
-      }
+      const message = 'Для проверки правил нужна сборка с мобильным ядром.';
+      if (!inline && mounted) _notify(message);
+      return message;
     } finally {
       if (mounted) setState(() => _validating = false);
     }
   }
 
   Future<void> _editRule([int? index, String? destination]) async {
-    final edit = await showDialog<RouteRule>(
+    await showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (_) => RuleEditor(
         servers: _servers,
         android: widget.core.supportsAndroidRules,
         pickGeoTag: _pickGeoTag,
+        pickProfile: (id) => _pickProfile(id, useMain: true),
+        pickApp: widget.core.supportsAndroidRules ? _pickApp : null,
+        save: (rule) {
+          final next = [..._rules];
+          if (index == null) {
+            next.add(rule);
+          } else {
+            next[index] = rule;
+          }
+          return _saveSettings(rules: next, inline: true);
+        },
         destination: destination,
         initial: index == null ? null : _rules[index],
       ),
     );
-    if (!mounted || edit == null) return;
-    final next = [..._rules];
-    if (index == null) {
-      next.add(edit);
-    } else {
-      next[index] = edit;
-    }
-    await _saveSettings(rules: next);
   }
+
+  Future<MapEntry<String, String>?> _pickApp() async {
+    final result = await _pickApps(null);
+    return result?.firstOrNull;
+  }
+
+  Future<List<MapEntry<String, String>>?> _pickApps(List<String>? existing) =>
+      showDialog<List<MapEntry<String, String>>>(
+        context: context,
+        builder: (_) => AppPicker(core: widget.core, existing: existing),
+      );
 
   Future<String?> _pickGeoTag() => showDialog<String>(
     context: context,
@@ -235,7 +263,8 @@ class _HomeState extends State<Home> {
   Future<void> _editScope() async {
     final edit = await showDialog<(AppScope, List<String>)>(
       context: context,
-      builder: (_) => ScopeEditor(scope: _scope, packages: _packages),
+      builder: (_) =>
+          ScopeEditor(scope: _scope, packages: _packages, pickApps: _pickApps),
     );
     if (!mounted || edit == null) return;
     final (scope, packages) = edit;
@@ -341,7 +370,7 @@ class _HomeState extends State<Home> {
                 title: const Text('Сервер не выбран'),
                 subtitle: const Text('Добавьте подписку или ссылку сервера'),
                 trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => setState(() => _tab = 1),
+                onTap: _import,
               )
             : ListTile(
                 key: const ValueKey('primary-profile'),
@@ -349,9 +378,7 @@ class _HomeState extends State<Home> {
                 title: Text(selected.name),
                 subtitle: Text(selected.protocol),
                 trailing: const Icon(Icons.unfold_more_rounded),
-                onTap: _importing || _validating
-                    ? null
-                    : () => _chooseProfile(servers),
+                onTap: _importing || _validating ? null : _chooseProfile,
               ),
       ),
       const _SectionTitle('Маршрутизация'),
@@ -406,11 +433,7 @@ class _HomeState extends State<Home> {
                   title: const Text('Обновить подписку'),
                   onTap: _importing || _validating
                       ? null
-                      : () => _updateSubscriptions(
-                          () =>
-                              widget.core.refreshSubscription(subscription.id),
-                          refresh: true,
-                        ),
+                      : () => _refresh(subscription.id),
                 ),
               for (final server in subscription.servers)
                 ListTile(
@@ -439,6 +462,18 @@ class _HomeState extends State<Home> {
   List<Widget> _rulesPage(BuildContext context) {
     return [
       const _PageTitle('Маршрутизация'),
+      FilledButton.icon(
+        onPressed: _validating || _importing ? null : () => _editRule(),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Добавить правило'),
+      ),
+      if (_rules.length > 1)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(4, 12, 4, 8),
+          child: Text('Срабатывает первое подходящее правило сверху.'),
+        ),
+      for (var index = 0; index < _rules.length; index++) _ruleTile(index),
+      const _SectionTitle('Другие настройки'),
       Card(
         child: ListTile(
           leading: const Icon(Icons.alt_route_rounded),
@@ -480,19 +515,6 @@ class _HomeState extends State<Home> {
           onTap: _validating || _importing ? null : _openGeo,
         ),
       ),
-      const _SectionTitle('Правила'),
-      for (var index = 0; index < _rules.length; index++) _ruleTile(index),
-      if (_rules.isEmpty)
-        const Padding(
-          padding: EdgeInsets.only(left: 4, bottom: 10),
-          child: Text('Добавьте правило для сайта, IP или порта.'),
-        ),
-      FilledButton.icon(
-        onPressed: _validating ? null : () => _editRule(),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Добавить правило'),
-      ),
-      const _SectionTitle('Цепочки профилей'),
       Card(
         child: ListTile(
           leading: const Icon(Icons.link_rounded),
@@ -628,10 +650,15 @@ class _ProfileIcon extends StatelessWidget {
 }
 
 class _ProfilePicker extends StatefulWidget {
-  const _ProfilePicker({required this.servers, required this.selected});
+  const _ProfilePicker({
+    required this.servers,
+    required this.selected,
+    this.useMain = false,
+  });
 
   final List<Server> servers;
   final String? selected;
+  final bool useMain;
 
   @override
   State<_ProfilePicker> createState() => _ProfilePickerState();
@@ -659,7 +686,18 @@ class _ProfilePickerState extends State<_ProfilePicker> {
           top: false,
           child: Column(
             children: [
-              const _PageTitle('Основной профиль'),
+              _PageTitle(
+                widget.useMain ? 'VPN-профиль правила' : 'Основной профиль',
+              ),
+              if (widget.useMain)
+                ListTile(
+                  title: const Text('Основной профиль'),
+                  subtitle: const Text(
+                    'Использовать профиль с главного экрана',
+                  ),
+                  selected: widget.selected == '',
+                  onTap: () => Navigator.pop(context, ''),
+                ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
                 child: TextField(

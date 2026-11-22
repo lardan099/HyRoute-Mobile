@@ -13,12 +13,35 @@ enum RouteAction: String, Codable, CaseIterable, Identifiable {
     }
   }
 
+  var help: String {
+    switch self {
+    case .tunnel: return "Отправлять через выбранный VPN-профиль."
+    case .direct: return "Подключаться без VPN."
+    case .block: return "Запрещать подключение."
+    }
+  }
+
   var symbol: String {
     switch self {
     case .tunnel: return "lock.shield"
     case .direct: return "arrow.up.right"
     case .block: return "hand.raised"
     }
+  }
+}
+
+func ruleDestinations(_ input: String) -> [String] {
+  var seen = Set<String>()
+  return input.components(separatedBy: .newlines).compactMap { line in
+    let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    let url = URLComponents(string: text)
+    var value = text
+    if let scheme = url?.scheme?.lowercased(), ["http", "https"].contains(scheme),
+       let host = url?.host, !host.isEmpty {
+      value = host.hasPrefix("[") && host.hasSuffix("]")
+        ? String(host.dropFirst().dropLast()) : host
+    }
+    return !value.isEmpty && seen.insert(value).inserted ? value : nil
   }
 }
 

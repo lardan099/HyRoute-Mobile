@@ -1,8 +1,13 @@
 package io.hyroute.hyroute_mobile;
 
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import java.io.File;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
@@ -65,6 +70,9 @@ public class MainActivity extends FlutterActivity {
                     Mobile.updateGeo();
                     result.success(null);
                     break;
+                case "launchableApps":
+                    result.success(launchableApps());
+                    break;
                 default:
                     result.notImplemented();
             }
@@ -73,5 +81,18 @@ public class MainActivity extends FlutterActivity {
         } catch (Exception e) {
             result.error("core", null, null);
         }
+    }
+
+    private Map<String, String> launchableApps() {
+        PackageManager packages = getPackageManager();
+        Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        Map<String, String> apps = new LinkedHashMap<>();
+        for (ResolveInfo activity : packages.queryIntentActivities(launcher, 0)) {
+            String id = activity.activityInfo.packageName;
+            if (!getPackageName().equals(id)) {
+                apps.putIfAbsent(id, activity.loadLabel(packages).toString());
+            }
+        }
+        return apps;
     }
 }

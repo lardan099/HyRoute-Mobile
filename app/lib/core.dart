@@ -11,6 +11,7 @@ abstract interface class ClientCore {
   Future<void> saveSettings(ClientSettings settings);
   Future<List<String>> geoTags();
   Future<void> updateGeo();
+  Future<Map<String, String>> launchableApps();
 }
 
 class PlatformCore implements ClientCore {
@@ -64,6 +65,10 @@ class PlatformCore implements ClientCore {
 
   @override
   Future<void> updateGeo() => _channel.invokeMethod<void>('updateGeo');
+
+  @override
+  Future<Map<String, String>> launchableApps() async =>
+      await _channel.invokeMapMethod<String, String>('launchableApps') ?? {};
 }
 
 class Server {
@@ -209,9 +214,30 @@ enum RouteAction {
     (action) => action.value == value,
     orElse: () => tunnel,
   );
+  String get help => switch (this) {
+    tunnel => 'Отправлять через выбранный VPN-профиль.',
+    direct => 'Подключаться без VPN.',
+    block => 'Запрещать подключение.',
+  };
   final String label;
   final String value;
 }
+
+List<String> ruleDestinations(String input) => input
+    .split('\n')
+    .map((line) {
+      final value = line.trim();
+      final url = Uri.tryParse(value);
+      if (url != null &&
+          (url.scheme == 'http' || url.scheme == 'https') &&
+          url.host.isNotEmpty) {
+        return url.host;
+      }
+      return value;
+    })
+    .where((item) => item.isNotEmpty)
+    .toSet()
+    .toList();
 
 class RouteRule {
   const RouteRule({

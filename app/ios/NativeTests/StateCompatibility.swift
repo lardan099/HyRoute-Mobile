@@ -30,5 +30,6 @@ struct StateCompatibility {
     let blank = try JSONDecoder().decode(ClientState.self, from: Data(#"{"subscriptions":[],"settings":{}}"#.utf8))
     precondition(blank.settings.routing.defaultAction == .tunnel)
     precondition(blank.selected == nil)
+    precondition(ruleDestinations("https://example.org/path?token=test\nexample.org\ngeoip:ru\n::1") == ["example.org", "geoip:ru", "::1"])
   }
 }

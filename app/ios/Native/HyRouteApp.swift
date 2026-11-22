@@ -24,7 +24,7 @@ private struct RootView: View {
       if client.ready {
         TabView(selection: $tab) {
           NavigationStack {
-            Dashboard(client: client, openSubscriptions: { tab = .subscriptions }, openRules: { tab = .rules })
+            Dashboard(client: client, openRules: { tab = .rules })
           }
           .tabItem { Label("Главная", systemImage: "house") }.tag(Tab.home)
           NavigationStack { SubscriptionsPage(client: client) }
@@ -56,9 +56,9 @@ private struct RootView: View {
 
 private struct Dashboard: View {
   @ObservedObject var client: Client
-  let openSubscriptions: () -> Void
   let openRules: () -> Void
   @State private var choosingProfile = false
+  @State private var importing = false
 
   var body: some View {
     List {
@@ -77,7 +77,7 @@ private struct Dashboard: View {
           .buttonStyle(.plain)
           .accessibilityIdentifier("profilePicker")
         } else {
-          Button(action: openSubscriptions) { Label("Добавить подписку", systemImage: "plus.circle") }
+          Button { importing = true } label: { Label("Добавить подписку", systemImage: "plus.circle") }
         }
       }
       Section("Маршрутизация") {
@@ -95,6 +95,7 @@ private struct Dashboard: View {
     .listStyle(.insetGrouped)
     .navigationTitle("HyRoute")
     .sheet(isPresented: $choosingProfile) { ProfilePicker(client: client) }
+    .sheet(isPresented: $importing) { ImportSheet(client: client) }
   }
 }
 
@@ -149,24 +150,38 @@ struct ProfileRow: View {
   }
 }
 
-private struct ProfilePicker: View {
+struct ProfilePicker: View {
   @ObservedObject var client: Client
+  var selected: String?
+  var select: ((String) -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
 
   var body: some View {
     NavigationStack {
-      List(client.state.profiles.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.host?.localizedCaseInsensitiveContains(query) == true }) { profile in
-        Button {
-          Task { if await client.select(profile.id) { dismiss() } }
-        } label: {
-          ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
+      List {
+        if let select {
+          Button { select(""); dismiss() } label: {
+            Label("Основной профиль", systemImage: "star")
+          }
         }
-        .buttonStyle(.plain)
-        .disabled(client.busy)
+        ForEach(client.state.profiles.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.host?.localizedCaseInsensitiveContains(query) == true }) { profile in
+          Button {
+            if let select {
+              select(profile.id)
+              dismiss()
+            } else {
+              Task { if await client.select(profile.id) { dismiss() } }
+            }
+          } label: {
+            ProfileRow(profile: profile, selected: (select == nil ? client.state.selected?.id : selected) == profile.id)
+          }
+          .buttonStyle(.plain)
+          .disabled(client.busy)
+        }
       }
       .searchable(text: $query, prompt: "Найти профиль")
-      .navigationTitle("Основной профиль")
+      .navigationTitle(select == nil ? "Основной профиль" : "Профиль правила")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
     }
@@ -249,6 +264,7 @@ private struct ImportSheet: View {
   @ObservedObject var client: Client
   @Environment(\.dismiss) private var dismiss
   @State private var input = ""
+  @State private var error: String?
 
   var body: some View {
     NavigationStack {
@@ -260,15 +276,26 @@ private struct ImportSheet: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .accessibilityLabel("Ссылка или конфиг подписки")
+          PasteButton(payloadType: String.self) { values in
+            if let first = values.first { input = first; error = nil }
+          }
+          .accessibilityLabel("Вставить подписку")
         }
         if client.busy { ProgressView("Импорт подписки") }
+        if let error { Text(error).foregroundStyle(.red) }
       }
       .navigationTitle("Добавить подписку")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Импортировать") { Task { if await client.importSubscription(input) { dismiss() } } }
+          Button("Импортировать") {
+            Task {
+              error = nil
+              if await client.importSubscription(input, reportError: false) { dismiss() }
+              else { error = "Не удалось импортировать. Проверьте ссылку или формат конфига." }
+            }
+          }
             .disabled(client.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
       }
