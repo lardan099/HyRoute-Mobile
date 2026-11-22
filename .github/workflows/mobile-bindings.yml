@@ -112,7 +112,11 @@ jobs:
         shell: bash
         run: |
           flutter --suppress-analytics build apk --debug --no-pub --target-platform android-arm64,android-x64
-          cp build/app/outputs/flutter-apk/app-debug.apk ../dist/HyRoute-Android-debug.apk
+          version="$(awk '/^version:/{split($2, parts, /[+]/); print parts[1]; exit}' pubspec.yaml)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          package="dist/HyRoute-Android-debug-$version.apk"
+          cp build/app/outputs/flutter-apk/app-debug.apk "../$package"
+          printf 'HYROUTE_APP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
       - name: Check SwiftUI state compatibility
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios
@@ -131,19 +135,21 @@ jobs:
           bundle="$output/HyRoute.app"
           /usr/libexec/PlistBuddy -c 'Print CFBundleSupportedPlatforms:0' "$bundle/Info.plist" | grep -Fx iPhoneOS
           /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$bundle/Info.plist" | grep -Fx io.hyroute.hyrouteMobile
+          version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$bundle/Info.plist")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           xcrun lipo "$bundle/HyRoute" -verify_arch arm64
           test ! -d "$bundle/Frameworks/Flutter.framework"
           work="$(mktemp -d)"
           mkdir "$work/Payload"
           ditto "$bundle" "$work/Payload/HyRoute.app"
-          ditto -c -k --keepParent "$work/Payload" ../../dist/HyRoute-iOS-unsigned.ipa
+          package="dist/HyRoute-iOS-unsigned-$version.ipa"
+          ditto -c -k --keepParent "$work/Payload" "../../$package"
+          printf 'HYROUTE_APP_PACKAGE=%s\nHYROUTE_APP_VERSION=%s\n' "$package" "$version" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: inputs.build_apps
         with:
           name: HyRoute-App-${{ matrix.platform }}
-          path: |
-            dist/HyRoute-Android-debug.apk
-            dist/HyRoute-iOS-unsigned.ipa
+          path: ${{ env.HYROUTE_APP_PACKAGE }}
           if-no-files-found: error
       - name: Open SwiftUI on an iPhone simulator
         if: inputs.build_apps && matrix.platform == 'iOS'
@@ -163,10 +169,12 @@ jobs:
           xcrun simctl install "$device" "$bundle"
           xcrun simctl launch "$device" io.hyroute.hyrouteMobile
           sleep 3
-          xcrun simctl io "$device" screenshot ../../dist/HyRoute-iOS-preview.png
+          preview="dist/HyRoute-iOS-preview-$HYROUTE_APP_VERSION.png"
+          xcrun simctl io "$device" screenshot "../../$preview"
+          printf 'HYROUTE_APP_PREVIEW=%s\n' "$preview" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: inputs.build_apps && matrix.platform == 'iOS'
         with:
           name: HyRoute-iOS-preview
-          path: dist/HyRoute-iOS-preview.png
+          path: ${{ env.HYROUTE_APP_PREVIEW }}
           if-no-files-found: error

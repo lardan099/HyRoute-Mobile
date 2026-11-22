@@ -41,4 +41,6 @@ Keychain и сохраняет данные при обновлении с то�
 
 Для тестовой сборки включите `build_apps` в workflow **Mobile Go bindings**.
 Для сборки одной платформы укажите её в поле `platform`. Workflow выдаёт
-APK для Android и IPA для iPhone. Для установки IPA требуется подпись Apple.
+APK для Android и IPA для iPhone с версией в имени, например
+`HyRoute-Android-debug-0.2.1.apk` и `HyRoute-iOS-unsigned-0.2.1.ipa`.
+Для установки IPA требуется подпись Apple.
