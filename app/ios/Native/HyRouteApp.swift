@@ -15,24 +15,51 @@ struct HyRouteApp: App {
 
 private struct RootView: View {
   @ObservedObject var client: Client
-  @Environment(\.colorScheme) private var colorScheme
   @State private var tab: Tab = .home
 
-  enum Tab { case home, subscriptions, rules }
+  private var previewScreen: String? {
+    #if targetEnvironment(simulator)
+    return ProcessInfo.processInfo.environment["HYROUTE_LAYOUT_PREVIEW"]
+    #else
+    return nil
+    #endif
+  }
+
+  enum Tab: CaseIterable, Hashable {
+    case home, subscriptions, rules
+
+    var title: String {
+      switch self {
+      case .home: return "Главная"
+      case .subscriptions: return "Подписки"
+      case .rules: return "Правила"
+      }
+    }
+
+    var icon: String {
+      switch self {
+      case .home: return "power"
+      case .subscriptions: return "server.rack"
+      case .rules: return "arrow.triangle.branch"
+      }
+    }
+  }
 
   var body: some View {
     Group {
       if client.ready {
-        TabView(selection: $tab) {
-          NavigationStack {
-            Dashboard(client: client, openRules: { tab = .rules })
+        ZStack {
+          panel(.home) { Dashboard(client: client, openRules: { tab = .rules }) }
+          panel(.subscriptions) {
+            if previewScreen == "servers", let id = client.state.subscriptions.first?.id {
+              SubscriptionPage(client: client, id: id)
+            } else {
+              SubscriptionsPage(client: client)
+            }
           }
-          .tabItem { Label("Главная", systemImage: "house") }.tag(Tab.home)
-          NavigationStack { SubscriptionsPage(client: client) }
-            .tabItem { Label("Подписки", systemImage: "square.stack") }.tag(Tab.subscriptions)
-          NavigationStack { RulesPage(client: client) }
-            .tabItem { Label("Правила", systemImage: "arrow.triangle.branch") }.tag(Tab.rules)
+          panel(.rules) { RulesPage(client: client) }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { tabBar }
       } else if client.busy {
         ProgressView("Открытие HyRoute")
       } else {
@@ -42,8 +69,20 @@ private struct RootView: View {
         }
       }
     }
-    .tint(colorScheme == .dark ? Color(red: 0.49, green: 0.88, blue: 0.73) : Color(red: 0.03, green: 0.39, blue: 0.31))
-    .task { if !client.ready { await client.load() } }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(HyStyle.canvas.ignoresSafeArea())
+    .tint(HyStyle.accent)
+    .task {
+      guard !client.ready else { return }
+      #if targetEnvironment(simulator)
+      if let previewScreen, client.loadLayoutPreview() {
+        if previewScreen == "servers" { tab = .subscriptions }
+        if previewScreen == "rules" { tab = .rules }
+        return
+      }
+      #endif
+      await client.load()
+    }
     .onReceive(NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)) { _ in
       client.syncVPNStatus()
     }
@@ -56,6 +95,39 @@ private struct RootView: View {
       Text(client.error ?? "")
     }
   }
+
+  private func panel<Content: View>(_ item: Tab, @ViewBuilder content: () -> Content) -> some View {
+    NavigationStack { content() }
+      .opacity(tab == item ? 1 : 0)
+      .allowsHitTesting(tab == item)
+      .accessibilityHidden(tab != item)
+      .zIndex(tab == item ? 1 : 0)
+  }
+
+  private var tabBar: some View {
+    HStack(spacing: 8) {
+      ForEach(Tab.allCases, id: \.self) { item in
+        Button { tab = item } label: {
+          VStack(spacing: 4) {
+            Image(systemName: item.icon).font(.system(size: 18, weight: .semibold))
+              .accessibilityHidden(true)
+            Text(item.title).font(.caption.weight(tab == item ? .bold : .medium))
+              .lineLimit(1)
+          }
+          .frame(maxWidth: .infinity, minHeight: 48)
+          .foregroundStyle(tab == item ? HyStyle.accent : HyStyle.muted)
+          .background(tab == item ? HyStyle.inset : .clear, in: RoundedRectangle(cornerRadius: 11))
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(tab == item ? .isSelected : [])
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .background(HyStyle.surface.ignoresSafeArea(edges: .bottom))
+    .overlay(alignment: .top) { Rectangle().fill(HyStyle.stroke).frame(height: 1).allowsHitTesting(false) }
+  }
 }
 
 private struct Dashboard: View {
@@ -65,44 +137,51 @@ private struct Dashboard: View {
   @State private var importing = false
 
   var body: some View {
-    List {
-      ConnectionStatus(client: client)
-        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-        .listRowBackground(Color.clear)
-      NavigationLink {
-        VPNJournalPage(client: client)
-      } label: {
-        Label("Журнал VPN", systemImage: "list.bullet.rectangle")
-      }
-      Section("Основной профиль") {
-        if let selected = client.state.selected {
-          Button { choosingProfile = true } label: {
-            HStack {
-              ProfileRow(profile: selected)
-              Image(systemName: "chevron.up.chevron.down")
-                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+    ScrollView {
+      VStack(alignment: .leading, spacing: 20) {
+        ConnectionStatus(client: client)
+        VStack(spacing: 8) {
+          HyHeading(text: "Основной профиль")
+          if let selected = client.state.selected {
+            Button { choosingProfile = true } label: {
+              HStack(spacing: 8) {
+                ProfileRow(profile: selected)
+                Image(systemName: "chevron.up.chevron.down")
+                  .font(.footnote.weight(.semibold)).foregroundStyle(HyStyle.muted)
+              }
+              .hyCard()
+              .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("profilePicker")
+          } else {
+            Button { importing = true } label: {
+              HyRow(title: "Добавить подписку", symbol: "plus").hyCard()
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        VStack(spacing: 0) {
+          Button(action: openRules) {
+            HyRow(title: "Маршрутизация", symbol: "arrow.triangle.branch",
+                  detail: "Всё остальное · \(client.state.settings.routing.defaultAction.label)")
           }
           .buttonStyle(.plain)
-          .accessibilityIdentifier("profilePicker")
-        } else {
-          Button { importing = true } label: { Label("Добавить подписку", systemImage: "plus.circle") }
-        }
-      }
-      Section("Маршрутизация") {
-        Button(action: openRules) {
-          HStack(spacing: 12) {
-            Label("Всё остальное", systemImage: "arrow.triangle.branch")
-            Spacer(minLength: 4)
-            Text(client.state.settings.routing.defaultAction.label).foregroundStyle(.secondary)
+          Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
+          NavigationLink {
+            VPNJournalPage(client: client)
+          } label: {
+            HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle")
           }
-          .contentShape(Rectangle())
+          .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .hyCard(padding: 12)
       }
+      .padding(16)
     }
-    .listStyle(.insetGrouped)
+    .hyScreen()
     .navigationTitle("HyRoute")
+    .navigationBarTitleDisplayMode(.inline)
     .sheet(isPresented: $choosingProfile) { ProfilePicker(client: client) }
     .sheet(isPresented: $importing) { ImportSheet(client: client) }
   }
@@ -126,32 +205,31 @@ private struct ConnectionStatus: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Image(systemName: "power")
-        .font(.system(size: 22, weight: .medium))
-        .foregroundStyle(Color(red: 0.53, green: 0.92, blue: 0.77))
-        .frame(width: 48, height: 48)
-        .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
-        .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(statusLabel).font(.title2.weight(.semibold))
-        if client.state.selected == nil && !isActive {
-          Text("Добавьте подписку, чтобы подключиться.")
-            .font(.subheadline).foregroundStyle(.white.opacity(0.74))
+    VStack(alignment: .leading, spacing: 18) {
+      HStack(spacing: 14) {
+        HyIcon(symbol: "lock.shield", size: 48)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(statusLabel).font(.title3.weight(.bold)).foregroundStyle(HyStyle.ink)
+          if client.state.selected == nil && !isActive {
+            Text("Добавьте подписку для подключения.")
+              .font(.subheadline).foregroundStyle(HyStyle.muted)
+          }
+        }
+        Spacer(minLength: 0)
+        if client.vpnStatus == .connected {
+          Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
+            .accessibilityHidden(true)
+        } else if client.vpnBusy || client.vpnStatus == .connecting || client.vpnStatus == .reasserting {
+          ProgressView().tint(HyStyle.accent)
         }
       }
-      Button(isActive ? "Отключить" : "Подключить") { Task { await client.toggleVPN() } }
-        .buttonStyle(.borderedProminent)
-        .tint(Color(red: 0.08, green: 0.40, blue: 0.32))
-        .disabled(client.vpnBusy || client.vpnStatus == .disconnecting || (client.state.selected == nil && !isActive))
+      Button { Task { await client.toggleVPN() } } label: {
+        Label(isActive ? "Отключить" : "Подключить", systemImage: "power")
+      }
+      .buttonStyle(HyButton(prominent: !isActive))
+      .disabled(client.vpnBusy || client.vpnStatus == .disconnecting || (client.state.selected == nil && !isActive))
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(20)
-    .foregroundStyle(.white)
-    .background(
-      LinearGradient(colors: [Color(red: 0.07, green: 0.20, blue: 0.17), Color(red: 0.07, green: 0.12, blue: 0.13)], startPoint: .topTrailing, endPoint: .bottomLeading),
-      in: RoundedRectangle(cornerRadius: 23)
-    )
+    .hyCard(padding: 16)
   }
 }
 
@@ -159,22 +237,26 @@ struct ProfileRow: View {
   let profile: VPNProfile
   var selected = false
 
+  private var displayTitle: String {
+    let parts = profile.title.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    let title = parts.filter { $0.compare(profile.transport, options: .caseInsensitive) != .orderedSame }
+    return title.isEmpty ? profile.title : title.joined(separator: " · ")
+  }
+
   var body: some View {
     HStack(spacing: 12) {
-      Image(systemName: profile.balance == true ? "bolt.fill" : "server.rack")
-        .foregroundStyle(.tint)
-        .frame(width: 34, height: 34)
-        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
-        .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(profile.title).font(.body.weight(.medium))
+      HyIcon(symbol: profile.balance == true ? "bolt.fill" : "server.rack")
+      VStack(alignment: .leading, spacing: 3) {
+        Text(displayTitle).font(.body.weight(.semibold))
+          .foregroundStyle(HyStyle.ink).lineLimit(2)
         Text(profile.missing == true ? "Сервер недоступен" : profile.transport)
-          .font(.subheadline).foregroundStyle(.secondary)
+          .font(.subheadline).foregroundStyle(HyStyle.muted).lineLimit(1)
       }
-      Spacer(minLength: 4)
-      if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .layoutPriority(1)
+      if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.accent) }
     }
-    .padding(.vertical, 4)
+    .frame(minHeight: 44)
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(selected ? .isSelected : [])
@@ -211,6 +293,7 @@ struct ProfilePicker: View {
           .disabled(client.busy)
         }
       }
+      .hyList()
       .searchable(text: $query, prompt: "Найти профиль")
       .navigationTitle(select == nil ? "Основной профиль" : "Профиль правила")
       .navigationBarTitleDisplayMode(.inline)
@@ -224,27 +307,33 @@ private struct SubscriptionsPage: View {
   @State private var adding = false
 
   var body: some View {
-    List {
-      if client.state.subscriptions.isEmpty {
-        Section {
-          Button { adding = true } label: { Label("Добавить подписку", systemImage: "plus.circle") }
-        } footer: {
-          Text("HTTPS-ссылка, конфиг Xray или ссылки Hysteria 2 и VLESS.")
-        }
-      }
-      ForEach(client.state.subscriptions) { item in
-        NavigationLink {
-          SubscriptionPage(client: client, id: item.id)
-        } label: {
-          VStack(alignment: .leading, spacing: 4) {
-            Label(item.name, systemImage: "square.stack")
-            Text("Профилей: \(item.servers.count)").font(.subheadline).foregroundStyle(.secondary)
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 10) {
+        if client.state.subscriptions.isEmpty {
+          VStack(alignment: .leading, spacing: 12) {
+            HyIcon(symbol: "server.rack", size: 48)
+            HyHeading(text: "Подписок пока нет")
+            Text("Добавьте ссылку или конфиг VPN.").foregroundStyle(HyStyle.muted)
+            Button { adding = true } label: { Label("Добавить подписку", systemImage: "plus") }
+              .buttonStyle(HyButton())
           }
-          .padding(.vertical, 5)
+          .hyCard(padding: 16)
+        }
+        ForEach(client.state.subscriptions) { item in
+          NavigationLink {
+            SubscriptionPage(client: client, id: item.id)
+          } label: {
+            HyRow(title: item.name, symbol: "square.stack", detail: "Профилей: \(item.servers.count)")
+              .hyCard(padding: 12)
+          }
+          .buttonStyle(.plain)
         }
       }
+      .padding(16)
     }
+    .hyScreen()
     .navigationTitle("Подписки")
+    .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       if !client.state.subscriptions.isEmpty {
         ToolbarItem(placement: .primaryAction) {
@@ -256,56 +345,81 @@ private struct SubscriptionsPage: View {
   }
 }
 
+private struct SubscriptionProbe: Hashable {
+  let scope: String
+  let id: String
+}
+
 private struct SubscriptionPage: View {
   @ObservedObject var client: Client
   let id: String
 
   var body: some View {
     if let item = client.state.subscriptions.first(where: { $0.id == id }) {
-      List {
-        Section {
-          NavigationLink {
-            ProbePage(client: client, scope: "subscription", id: id)
-          } label: {
-            Label("Проверить всю подписку", systemImage: "speedometer")
-          }
-          .disabled(!item.servers.contains { $0.missing != true })
-        }
-        if item.canRefresh == true {
-          Section {
-            Button { Task { await client.refresh(id) } } label: {
-              if client.busy {
-                ProgressView("Обновление подписки")
-              } else {
-                Label("Обновить подписку", systemImage: "arrow.clockwise")
-              }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 16) {
+          HStack(spacing: 10) {
+            NavigationLink(value: SubscriptionProbe(scope: "subscription", id: id)) {
+              Label("Проверить все", systemImage: "speedometer")
             }
-            .disabled(client.busy)
-          }
-        }
-        Section("Профили") {
-          ForEach(item.servers) { profile in
-            HStack {
-              Button { Task { _ = await client.select(profile.id) } } label: {
-                ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
+            .buttonStyle(HyButton())
+            .disabled(!item.servers.contains { $0.missing != true })
+            if item.canRefresh == true {
+              Button { Task { await client.refresh(id) } } label: {
+                Group {
+                  if client.busy { ProgressView().tint(HyStyle.accent) }
+                  else { Image(systemName: "arrow.clockwise").font(.body.weight(.semibold)) }
+                }
+                .foregroundStyle(HyStyle.accent)
+                .frame(width: 48, height: 48)
+                .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 12))
+                .contentShape(Rectangle())
               }
               .buttonStyle(.plain)
-              .disabled(client.busy || profile.missing == true)
-              if profile.missing != true {
-                NavigationLink {
-                  ProbePage(client: client, scope: "profile", id: profile.id)
-                } label: {
-                  Image(systemName: "speedometer").frame(width: 36, height: 40)
+              .accessibilityLabel("Обновить подписку")
+              .disabled(client.busy)
+            }
+          }
+          HyHeading(text: "Серверы")
+          LazyVStack(spacing: 0) {
+            ForEach(item.servers) { profile in
+              HStack(spacing: 6) {
+                Button { Task { _ = await client.select(profile.id) } } label: {
+                  ProfileRow(profile: profile, selected: client.state.selected?.id == profile.id)
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
+                .buttonStyle(.plain)
+                .disabled(client.busy || profile.missing == true)
+                if profile.missing != true {
+                  NavigationLink(value: SubscriptionProbe(scope: "profile", id: profile.id)) {
+                    Image(systemName: "speedometer")
+                      .font(.body.weight(.semibold))
+                      .foregroundStyle(HyStyle.accent)
+                      .frame(width: 44, height: 44)
+                      .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+                  .fixedSize(horizontal: true, vertical: false)
+                  .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
+                }
+              }
+              .padding(.horizontal, 12)
+              .padding(.vertical, 8)
+              if profile.id != item.servers.last?.id {
+                Divider().overlay(HyStyle.stroke).padding(.leading, 60)
               }
             }
           }
+          .hyCard(padding: 0)
         }
+        .padding(16)
       }
+      .hyScreen()
       .navigationTitle(item.name)
       .navigationBarTitleDisplayMode(.inline)
+      .navigationDestination(for: SubscriptionProbe.self) { probe in
+        ProbePage(client: client, scope: probe.scope, id: probe.id)
+      }
     }
   }
 }
@@ -318,36 +432,47 @@ private struct ImportSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
-        Section("Ссылка или конфиг") {
-          TextEditor(text: $input)
-            .frame(minHeight: 116)
-            .font(.body.monospaced())
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .accessibilityLabel("Ссылка или конфиг подписки")
-          PasteButton(payloadType: String.self) { values in
-            if let first = values.first { input = first; error = nil }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          VStack(alignment: .leading, spacing: 10) {
+            HyHeading(text: "Ссылка или конфиг")
+            TextEditor(text: $input)
+              .frame(minHeight: 136)
+              .font(.body.monospaced())
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .scrollContentBackground(.hidden)
+              .padding(8)
+              .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
+              .accessibilityLabel("Ссылка или конфиг подписки")
+            PasteButton(payloadType: String.self) { values in
+              if let first = values.first { input = first; error = nil }
+            }
+            .accessibilityLabel("Вставить подписку")
           }
-          .accessibilityLabel("Вставить подписку")
-        }
-        if client.busy { ProgressView("Импорт подписки") }
-        if let error { Text(error).foregroundStyle(.red) }
-      }
-      .navigationTitle("Добавить подписку")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Импортировать") {
+          .hyCard()
+          if let error { Text(error).foregroundStyle(HyStyle.failure) }
+          Button {
             Task {
               error = nil
               if await client.importSubscription(input, reportError: false) { dismiss() }
               else { error = "Не удалось импортировать. Проверьте ссылку или формат конфига." }
             }
+          } label: {
+            if client.busy { ProgressView().tint(.white) }
+            else { Label("Импортировать", systemImage: "arrow.down") }
           }
-            .disabled(client.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          .buttonStyle(HyButton())
+          .disabled(client.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .padding(16)
+      }
+      .hyScreen()
+      .scrollDismissesKeyboard(.interactively)
+      .navigationTitle("Добавить подписку")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
       }
     }
     .interactiveDismissDisabled(client.busy)

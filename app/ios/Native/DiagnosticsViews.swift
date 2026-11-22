@@ -97,19 +97,39 @@ struct VPNJournalPage: View {
   @State private var failed = false
 
   var body: some View {
-    List {
-      if loading {
-        ProgressView("Читаем журнал")
-      } else if failed || lines.isEmpty {
-        Text(failed ? "Не удалось прочитать журнал" : "Событий пока нет")
-          .foregroundStyle(.secondary)
-      } else {
-        ForEach(lines.indices, id: \.self) { index in
-          Text(lines[index]).textSelection(.enabled)
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 0) {
+        if loading {
+          ProgressView("Читаем журнал").padding(12)
+        } else if failed || lines.isEmpty {
+          HyRow(title: failed ? "Не удалось прочитать журнал" : "Событий пока нет",
+                symbol: "list.bullet.rectangle", disclosure: false)
+            .padding(12)
+        } else {
+          ForEach(lines.indices, id: \.self) { index in
+            let line = lines[index]
+            let split = line.range(of: "  ")
+            VStack(alignment: .leading, spacing: 5) {
+              if let split {
+                Text(line[..<split.lowerBound]).font(.caption.monospacedDigit().weight(.medium))
+                  .foregroundStyle(HyStyle.muted)
+              }
+              Text(split.map { String(line[$0.upperBound...]) } ?? line)
+                .font(.body.weight(.medium)).foregroundStyle(HyStyle.ink)
+                .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            if index < lines.count - 1 { Divider().overlay(HyStyle.stroke).padding(.horizontal, 12) }
+          }
         }
       }
+      .hyCard(padding: 0)
+      .padding(16)
     }
+    .hyScreen()
     .navigationTitle("Журнал VPN")
+    .navigationBarTitleDisplayMode(.inline)
     .refreshable { await load() }
     .task {
       while !Task.isCancelled {
@@ -147,25 +167,48 @@ struct ProbePage: View {
 
   var body: some View {
     let results = snapshot?.results ?? []
-    List {
-      Section {
-        if running { ProgressView("Проверяем задержку") }
-        if failed { Text("Не удалось проверить выбранные серверы").foregroundStyle(.secondary) }
-        ForEach(results.indices, id: \.self) { index in
-          let row = results[index]
-          HStack {
-            VStack(alignment: .leading, spacing: 4) {
-              Text(row.name)
-              if let host = row.host { Text(host).font(.subheadline).foregroundStyle(.secondary) }
+    ScrollView {
+      VStack(alignment: .leading, spacing: 12) {
+        if running {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Проверяем задержку").font(.subheadline.weight(.semibold)).foregroundStyle(HyStyle.ink)
+            if results.isEmpty { ProgressView().tint(HyStyle.accent) }
+            else {
+              let complete = results.filter { $0.status != "pending" && $0.status != "running" }.count
+              ProgressView(value: Double(complete), total: Double(results.count)).tint(HyStyle.accent)
             }
-            Spacer()
-            Text(row.label).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
           }
+          .hyCard()
         }
-      } footer: {
-        Text("HTTPS-запрос через каждый сервер")
+        if failed { Text("Не удалось проверить выбранные серверы").foregroundStyle(HyStyle.failure).hyCard() }
+        if !results.isEmpty {
+          LazyVStack(spacing: 0) {
+            ForEach(results.indices, id: \.self) { index in
+              let row = results[index]
+              HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(row.name).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink).lineLimit(2)
+                  if let host = row.host { Text(host).font(.subheadline).foregroundStyle(HyStyle.muted).lineLimit(1) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(row.label)
+                  .font(.caption.monospacedDigit().weight(.semibold))
+                  .foregroundStyle(row.status == "ok" ? HyStyle.success : HyStyle.muted)
+                  .multilineTextAlignment(.trailing)
+                  .padding(.horizontal, 8).padding(.vertical, 6)
+                  .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 7))
+              }
+              .padding(12)
+              if index < results.count - 1 { Divider().overlay(HyStyle.stroke).padding(.horizontal, 12) }
+            }
+          }
+          .hyCard(padding: 0)
+        }
+        Text("HTTPS-запрос через каждый сервер").font(.footnote).foregroundStyle(HyStyle.muted)
       }
+      .padding(16)
     }
+    .hyScreen()
     .navigationTitle("Задержка серверов")
     .navigationBarTitleDisplayMode(.inline)
     .task(id: run) { await measure() }

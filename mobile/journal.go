@@ -40,6 +40,7 @@ var journalMessages = map[string]string{
 	"vpn_cancelled":         "Запуск VPN отменён",
 	"vpn_disconnect":        "iOS отключила активный VPN",
 	"vpn_ios_error":         "Последняя ошибка VPN от iOS",
+	"vpn_extension_retry":   "iOS сообщила о сбое расширения. Повторный запуск VPN",
 	"probe_start":           "Начата проверка задержки",
 	"probe_done":            "Проверка задержки завершена",
 	"probe_cancel":          "Проверка задержки отменена",

@@ -76,6 +76,7 @@ final class Client: ObservableObject {
   private var watchdog: Task<Void, Never>?
   private var attemptID = UUID()
   private var stoppingVPN = false
+  private var mayRetryExtension = false
   @Published private(set) var state = ClientState()
   @Published private(set) var ready = false
   @Published private(set) var busy = false
@@ -108,7 +109,12 @@ final class Client: ObservableObject {
     guard state.selected != nil, vpnStatus != .disconnecting else { return }
     vpnBusy = true
     defer { vpnBusy = false }
+    mayRetryExtension = true
     await core.record("vpn_request")
+    await launchVPN()
+  }
+
+  private func launchVPN() async {
     do {
       let snapshot = try await core.vpnState()
       do {
@@ -210,15 +216,54 @@ final class Client: ObservableObject {
         await self.logVPNError(error, event: "vpn_ios_error")
         guard self.attemptID == attempt, self.vpnStatus != .connected else { return }
         let detail = error as NSError
+        if event == "vpn_start_failed", self.mayRetryExtension,
+           self.vpnStatus == .disconnected || self.vpnStatus == .invalid,
+           detail.domain == NEVPNConnectionErrorDomain,
+           NEVPNConnectionError(rawValue: detail.code) == .pluginFailed {
+          self.mayRetryExtension = false
+          self.error = nil
+          self.vpnBusy = true
+          defer { self.vpnBusy = false }
+          await self.core.record("vpn_extension_retry")
+          await self.launchVPN()
+          return
+        }
         if detail.domain == TunnelStartError.errorDomain,
            let tunnelError = TunnelStartError(rawValue: detail.code) {
           self.error = tunnelError.userMessage
+        } else if detail.domain == NEVPNConnectionErrorDomain,
+                  NEVPNConnectionError(rawValue: detail.code) == .pluginFailed {
+          self.error = "iOS не смогла запустить VPN-расширение (код \(detail.code))."
         } else {
           self.error = message + " Код \(detail.code)."
         }
       }
     }
   }
+
+#if targetEnvironment(simulator)
+  func loadLayoutPreview() -> Bool {
+    let fixture = """
+    {
+      "subscriptions": [{"id":"preview","title":"Серверы","canRefresh":true,"servers":[
+        {"id":"auto","name":"Автовыбор","protocol":"vless","balance":true,"balanceStrategy":"leastPing"},
+        {"id":"fi","name":"🇫🇮 Хельсинки · Северный узел | Hysteria 2","protocol":"hysteria2"},
+        {"id":"nl","name":"🇳🇱 Амстердам · Резервный сервер | VLESS","protocol":"vless"},
+        {"id":"jp","name":"🇯🇵 Токио · Восточная Азия | Hysteria 2","protocol":"hysteria2"},
+        {"id":"de","name":"🇩🇪 Франкфурт · Основной европейский сервер | VLESS","protocol":"vless"}
+      ]}],
+      "settings":{"selected":"auto","routing":{"defaultAction":"tunnel","rules":[
+        {"action":"direct","domains":["geosite:ru"]},
+        {"action":"block","domains":["geosite:category-ads-all"]}
+      ]}}
+    }
+    """
+    guard let preview = try? JSONDecoder().decode(ClientState.self, from: Data(fixture.utf8)) else { return false }
+    state = preview
+    ready = true
+    return true
+  }
+#endif
 
   private func logVPNError(_ error: Error, event: String) async {
     let detail = error as NSError

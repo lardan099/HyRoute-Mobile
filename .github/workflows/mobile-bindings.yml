@@ -178,10 +178,13 @@ jobs:
           xcrun simctl ui "$device" appearance dark
           xcrun simctl install "$device" "$bundle"
           xcrun simctl launch "$device" io.hyroute.hyrouteMobile
-          sleep 3
-          preview="dist/HyRoute-iOS-preview-$HYROUTE_APP_VERSION.png"
-          xcrun simctl io "$device" screenshot "../../$preview"
-          printf 'HYROUTE_APP_PREVIEW=%s\n' "$preview" >> "$GITHUB_ENV"
+          for screen in home servers rules; do
+            SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
+              xcrun simctl launch --terminate-running-process "$device" io.hyroute.hyrouteMobile
+            sleep 2
+            xcrun simctl io "$device" screenshot "../../dist/HyRoute-iOS-$screen-$HYROUTE_APP_VERSION.png"
+          done
+          printf 'HYROUTE_APP_PREVIEW=dist/HyRoute-iOS-*-%s.png\n' "$HYROUTE_APP_VERSION" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: inputs.build_apps && matrix.platform == 'iOS'
         with:

@@ -10,32 +10,31 @@ struct RulesPage: View {
   var body: some View {
     List {
       Section {
-        Button { editing = RuleDraft(rule: RouteRule()) } label: { Label("Добавить правило", systemImage: "plus.circle") }
+        Button { editing = RuleDraft(rule: RouteRule()) } label: { Label("Добавить правило", systemImage: "plus") }
+          .buttonStyle(HyButton())
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
       }
       if !routing.rules.isEmpty {
         Section {
           ForEach(routing.rules.indices, id: \.self) { index in
             let rule = routing.rules[index]
             Button { editing = RuleDraft(index: index, rule: rule) } label: {
-              Label {
-                VStack(alignment: .leading, spacing: 4) {
-                  Text(rule.title).lineLimit(2)
-                  Text(rule.profile.map(profileName) ?? rule.action.label)
-                    .font(.subheadline).foregroundStyle(.secondary)
-                }
-              } icon: {
-                Image(systemName: rule.action.symbol).foregroundStyle(.tint)
-              }
+              HyRow(title: rule.title, symbol: rule.action.symbol,
+                    detail: rule.profile.map(profileName) ?? rule.action.label)
+                .lineLimit(2)
             }
             .buttonStyle(.plain)
           }
           .onDelete { indices in mutate { $0.rules.remove(atOffsets: indices) } }
           .onMove { indices, offset in mutate { $0.rules.move(fromOffsets: indices, toOffset: offset) } }
+        } header: {
+          Text("Правила по порядку")
         } footer: {
           if routing.rules.count > 1 { Text("Срабатывает первое подходящее правило сверху.") }
         }
       }
-      Section("Другие настройки") {
+      Section("Остальной трафик и профили") {
         Picker("Всё остальное", selection: Binding(
           get: { routing.defaultAction },
           set: { action in mutate { $0.defaultAction = action } }
@@ -59,7 +58,7 @@ struct RulesPage: View {
               }
             }
           } icon: {
-            Image(systemName: "link")
+            HyIcon(symbol: "link")
           }
         }
         .buttonStyle(.plain)
@@ -67,12 +66,14 @@ struct RulesPage: View {
         NavigationLink {
           GeoCatalog(client: client)
         } label: {
-          Label("GeoSite и GeoIP", systemImage: "globe.europe.africa")
+          HyRow(title: "Базы правил", symbol: "globe.europe.africa", detail: "GeoSite и GeoIP", disclosure: false)
         }
       }
     }
     .disabled(client.busy)
+    .hyList()
     .navigationTitle("Правила")
+    .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       if !routing.rules.isEmpty { ToolbarItem(placement: .primaryAction) { EditButton() } }
     }
@@ -128,68 +129,90 @@ private struct RuleEditor: View {
 
   var body: some View {
     NavigationStack {
-      Form {
-        Section("Что направить?") {
-          TextField("Сайт, ссылка или IP", text: $destination, axis: .vertical)
-            .lineLimit(1...4)
-            .textInputAutocapitalization(.never).autocorrectionDisabled()
-            .onChange(of: destination) { _ in error = nil }
-          if destination.localizedCaseInsensitiveContains("http://") || destination.localizedCaseInsensitiveContains("https://") {
-            Text("В правило попадёт: \(domains.joined(separator: ", "))").font(.footnote).foregroundStyle(.secondary)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          VStack(alignment: .leading, spacing: 10) {
+            HyHeading(text: "Что направить")
+            TextField("Сайт, ссылка или IP", text: $destination, axis: .vertical)
+              .lineLimit(2...5)
+              .textInputAutocapitalization(.never).autocorrectionDisabled()
+              .onChange(of: destination) { _ in error = nil }
+              .padding(12)
+              .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
+            if destination.localizedCaseInsensitiveContains("http://") || destination.localizedCaseInsensitiveContains("https://") {
+              Text("В правило попадёт \(domains.joined(separator: ", "))")
+                .font(.footnote).foregroundStyle(HyStyle.muted)
+            }
+            ViewThatFits(in: .horizontal) {
+              HStack { pasteDestination; geoButton }
+              VStack(alignment: .leading) { pasteDestination; geoButton }
+            }
           }
-          PasteButton(payloadType: String.self) { values in
-            if let value = values.first { appendDestination(value) }
-          }
-          .accessibilityLabel("Вставить сайт или ссылку")
-          Button { choosingGeo = true } label: { Label("Готовый список", systemImage: "globe.europe.africa") }
-        }
-        Section {
-          ForEach(RouteAction.allCases) { option in
-            Button { action = option } label: {
-              HStack {
-                Label(option.label, systemImage: option.symbol)
-                Spacer()
-                if action == option { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+          .hyCard()
+
+          VStack(alignment: .leading, spacing: 8) {
+            HyHeading(text: "Куда направить")
+            ForEach(RouteAction.allCases) { option in
+              Button { action = option } label: {
+                HStack(spacing: 10) {
+                  Image(systemName: option.symbol).frame(width: 22).accessibilityHidden(true)
+                  Text(option.label).font(.body.weight(action == option ? .semibold : .regular))
+                  Spacer(minLength: 0)
+                  if action == option { Image(systemName: "checkmark.circle.fill").accessibilityHidden(true) }
+                }
+                .foregroundStyle(action == option ? HyStyle.accent : HyStyle.ink)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 44)
+                .background(action == option ? HyStyle.inset : .clear, in: RoundedRectangle(cornerRadius: 9))
+                .contentShape(Rectangle())
               }
-              .contentShape(Rectangle())
+              .buttonStyle(.plain)
+              .accessibilityAddTraits(action == option ? .isSelected : [])
             }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(action == option ? .isSelected : [])
-          }
-          if action == .tunnel {
-            Button { choosingProfile = true } label: {
-              Label(profile.isEmpty ? "Основной профиль" :
-                (client.state.profiles.first { $0.id == profile }?.title ?? "Профиль недоступен"),
-                systemImage: "server.rack")
+            if action == .tunnel {
+              Divider()
+              Button { choosingProfile = true } label: {
+                HyRow(title: "VPN-профиль", symbol: "server.rack", detail: profile.isEmpty ? "Основной профиль" :
+                  (client.state.profiles.first { $0.id == profile }?.title ?? "Профиль недоступен"))
+              }
+              .buttonStyle(.plain)
             }
           }
-        } header: {
-          Text("Куда?")
-        } footer: {
-          Text(action.help)
+          .hyCard()
+
+          DisclosureGroup("Порт и протокол", isExpanded: $advanced) {
+            VStack(spacing: 10) {
+              TextField("Порт или диапазон", text: $ports)
+                .keyboardType(.numbersAndPunctuation)
+                .padding(10)
+                .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 9))
+              Picker("Протокол", selection: $network) {
+                Text("Любой").tag("")
+                Text("TCP").tag("tcp")
+                Text("UDP").tag("udp")
+              }
+              .pickerStyle(.segmented)
+            }
+            .padding(.top, 10)
+          }
+          .hyCard()
+          if let error { Text(error).foregroundStyle(HyStyle.failure) }
         }
-        Section {
-          DisclosureGroup("Дополнительные условия", isExpanded: $advanced) {
-            TextField("Порт или диапазон", text: $ports)
-              .keyboardType(.numbersAndPunctuation)
-            Picker("Протокол", selection: $network) {
-              Text("Любой").tag("")
-              Text("TCP").tag("tcp")
-              Text("UDP").tag("udp")
-            }
-          }
-        }
-        if let error { Text(error).foregroundStyle(.red) }
+        .padding(16)
       }
       .scrollDismissesKeyboard(.interactively)
+      .hyScreen()
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        Button("Сохранить правило") { Task { await save() } }
+          .buttonStyle(HyButton())
+          .disabled(client.busy)
+          .padding(16)
+          .background(HyStyle.canvas.ignoresSafeArea(edges: .bottom))
+      }
       .navigationTitle(draft.index == nil ? "Новое правило" : "Правило")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Сохранить") { Task { await save() } }
-            .disabled(client.busy)
-        }
       }
       .sheet(isPresented: $choosingGeo) {
         NavigationStack {
@@ -205,6 +228,18 @@ private struct RuleEditor: View {
       }
     }
     .interactiveDismissDisabled(client.busy)
+  }
+
+  private var pasteDestination: some View {
+    PasteButton(payloadType: String.self) { values in
+      if let value = values.first { appendDestination(value) }
+    }
+    .accessibilityLabel("Вставить сайт или ссылку")
+  }
+
+  private var geoButton: some View {
+    Button { choosingGeo = true } label: { Label("Готовый список", systemImage: "globe.europe.africa") }
+      .buttonStyle(.bordered)
   }
 
   private func save() async {
@@ -254,6 +289,7 @@ private struct ChainEditor: View {
           ForEach(client.state.profiles.filter { $0.id != exit }) { Text($0.title).tag($0.id) }
         }
       }
+      .hyList()
       .navigationTitle("Цепочка профилей")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -303,6 +339,7 @@ private struct GeoCatalog: View {
         }
       }
     }
+    .hyList()
     .navigationTitle(select == nil ? "GeoSite и GeoIP" : "Готовые списки")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $query, prompt: "Найти категорию")
