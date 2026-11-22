@@ -60,10 +60,26 @@ class _HomeState extends State<Home> {
               ?.id;
   }
 
-  List<Server> get _servers => [
-    for (final subscription in _subscriptions)
-      ...subscription.servers.where((server) => !server.missing),
-  ];
+  List<Server> get _servers {
+    final active = _subscriptions
+        .expand((subscription) => subscription.servers)
+        .where((server) => !server.missing);
+    return [
+      ...active.where((server) => server.balance),
+      ...active.where((server) => !server.balance),
+    ];
+  }
+
+  Future<void> _chooseProfile(List<Server> servers) async {
+    final id = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => _ProfilePicker(servers: servers, selected: _selected),
+    );
+    if (mounted && id != null) await _saveSettings(selected: id);
+  }
 
   String _serverName(String id) {
     for (final server in _servers) {
@@ -238,6 +254,7 @@ class _HomeState extends State<Home> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        centerTitle: false,
         title: const Text(
           'HyRoute',
           style: TextStyle(fontWeight: FontWeight.w700),
@@ -246,7 +263,7 @@ class _HomeState extends State<Home> {
         leading: Padding(
           padding: const EdgeInsets.only(left: 16, top: 6, bottom: 6),
           child: Center(
-            child: Image.asset('assets/hyroute.png', width: 38, height: 38),
+            child: Image.asset('assets/hyroute.png', width: 31, height: 31),
           ),
         ),
       ),
@@ -311,11 +328,14 @@ class _HomeState extends State<Home> {
 
   List<Widget> _connectionPage(BuildContext context) {
     final servers = _servers;
+    final selected = servers
+        .where((server) => server.id == _selected)
+        .firstOrNull;
     return [
       const _ConnectionCard(),
       const _SectionTitle('Основной профиль'),
       Card(
-        child: servers.isEmpty
+        child: selected == null
             ? ListTile(
                 leading: const Icon(Icons.dns_outlined),
                 title: const Text('Сервер не выбран'),
@@ -324,17 +344,14 @@ class _HomeState extends State<Home> {
                 onTap: () => setState(() => _tab = 1),
               )
             : ListTile(
-                leading: const Icon(Icons.dns_outlined),
-                title: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    isExpanded: true,
-                    value: _selected,
-                    items: serverItems(servers),
-                    onChanged: _importing || _validating
-                        ? null
-                        : (value) => _saveSettings(selected: value),
-                  ),
-                ),
+                key: const ValueKey('primary-profile'),
+                leading: _ProfileIcon(balance: selected.balance),
+                title: Text(selected.name),
+                subtitle: Text(selected.protocol),
+                trailing: const Icon(Icons.unfold_more_rounded),
+                onTap: _importing || _validating
+                    ? null
+                    : () => _chooseProfile(servers),
               ),
       ),
       const _SectionTitle('Маршрутизация'),
@@ -353,6 +370,17 @@ class _HomeState extends State<Home> {
   List<Widget> _subscriptionPage(BuildContext context) {
     return [
       const _PageTitle('Подписки'),
+      OutlinedButton.icon(
+        onPressed: _importing || _validating ? null : _import,
+        icon: _importing
+            ? const SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.add_rounded),
+        label: Text(_importing ? 'Загрузка…' : 'Добавить подписку'),
+      ),
+      const SizedBox(height: 10),
       if (_subscriptions.isEmpty)
         const Card(
           child: ListTile(
@@ -386,7 +414,7 @@ class _HomeState extends State<Home> {
                 ),
               for (final server in subscription.servers)
                 ListTile(
-                  leading: const Icon(Icons.dns_outlined),
+                  leading: _ProfileIcon(balance: server.balance),
                   title: Text(server.name),
                   subtitle: Text(
                     [
@@ -405,17 +433,6 @@ class _HomeState extends State<Home> {
             ],
           ),
         ),
-      const SizedBox(height: 12),
-      FilledButton.icon(
-        onPressed: _importing || _validating ? null : _import,
-        icon: _importing
-            ? const SizedBox.square(
-                dimension: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.add_rounded),
-        label: Text(_importing ? 'Загрузка…' : 'Добавить подписку'),
-      ),
     ];
   }
 
@@ -538,24 +555,32 @@ class _ConnectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xff111d34),
+        color: const Color(0xff122522),
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xff11203a), Color(0xff203b67)],
+          colors: [Color(0xff203d34), Color(0xff111f20)],
         ),
-        borderRadius: BorderRadius.circular(26),
+        borderRadius: BorderRadius.circular(23),
       ),
       child: Padding(
         padding: const EdgeInsets.all(22),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const CircleAvatar(
-              radius: 26,
-              backgroundColor: Color(0xff2e4875),
-              foregroundColor: Color(0xffd5e4ff),
-              child: Icon(Icons.power_settings_new_rounded, size: 29),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                color: Color(0xff355049),
+                borderRadius: BorderRadius.all(Radius.circular(14)),
+              ),
+              child: SizedBox.square(
+                dimension: 48,
+                child: Icon(
+                  Icons.power_settings_new_rounded,
+                  size: 23,
+                  color: Color(0xff91efcb),
+                ),
+              ),
             ),
             const SizedBox(height: 18),
             Text(
@@ -568,18 +593,107 @@ class _ConnectionCard extends StatelessWidget {
             const SizedBox(height: 6),
             const Text(
               'Туннель ещё в разработке',
-              style: TextStyle(color: Color(0xffc1cfe7)),
-            ),
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: null,
-              style: FilledButton.styleFrom(
-                disabledBackgroundColor: const Color(0xff2e4875),
-                disabledForegroundColor: const Color(0xffc1cfe7),
-              ),
-              child: const Text('Подключить'),
+              style: TextStyle(color: Color(0xffc4d7ce)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileIcon extends StatelessWidget {
+  const _ProfileIcon({required this.balance});
+
+  final bool balance;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.primary.withValues(alpha: 0.11),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: SizedBox.square(
+        dimension: 34,
+        child: Icon(
+          balance ? Icons.bolt_rounded : Icons.dns_outlined,
+          size: 19,
+          color: colors.primary,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfilePicker extends StatefulWidget {
+  const _ProfilePicker({required this.servers, required this.selected});
+
+  final List<Server> servers;
+  final String? selected;
+
+  @override
+  State<_ProfilePicker> createState() => _ProfilePickerState();
+}
+
+class _ProfilePickerState extends State<_ProfilePicker> {
+  var _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = widget.servers
+        .where(
+          (server) =>
+              server.name.toLowerCase().contains(_query) ||
+              server.host.toLowerCase().contains(_query),
+        )
+        .toList(growable: false);
+    return FractionallySizedBox(
+      heightFactor: 0.86,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              const _PageTitle('Основной профиль'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: TextField(
+                  onChanged: (value) =>
+                      setState(() => _query = value.trim().toLowerCase()),
+                  decoration: const InputDecoration(
+                    labelText: 'Найти профиль',
+                    prefixIcon: Icon(Icons.search_rounded),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: matches.isEmpty
+                    ? const Center(child: Text('Профиль не найден.'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) {
+                          final server = matches[index];
+                          return ListTile(
+                            leading: _ProfileIcon(balance: server.balance),
+                            title: Text(server.name),
+                            subtitle: Text(server.protocol),
+                            selected: server.id == widget.selected,
+                            trailing: server.id == widget.selected
+                                ? const Icon(Icons.check_rounded)
+                                : null,
+                            onTap: () => Navigator.pop(context, server.id),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -113,10 +113,20 @@ void main() {
     expect(find.text('VLESS · leastPing'), findsOneWidget);
     await _tap(tester, '⚡️ Автовыбор');
     await _tap(tester, 'Главная');
-    final selector = tester.widget<DropdownButton<String>>(
-      find.byType(DropdownButton<String>),
+    final selector = find.byKey(const ValueKey('primary-profile'));
+    expect(
+      find.descendant(of: selector, matching: find.text('⚡️ Автовыбор')),
+      findsOneWidget,
     );
-    expect(selector.value, 'auto');
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'фин');
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Финляндия');
+    expect(
+      find.descendant(of: selector, matching: find.text('Финляндия')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('adds a geosite category from the rule editor', (tester) async {
@@ -153,18 +163,18 @@ void main() {
     tester,
   ) async {
     final core = await _openApp(tester);
-    final connect = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Подключить'),
-    );
-    expect(connect.onPressed, isNull);
+    expect(find.text('VPN выключен'), findsOneWidget);
     await _importTestSubscription(tester);
     expect(core.input, 'https://example.org/subscribe');
     expect(find.text('Тестовая подписка'), findsOneWidget);
     await _tap(tester, 'Главная');
-    final selected = tester.widget<DropdownButton<String>>(
-      find.byType(DropdownButton<String>),
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('primary-profile')),
+        matching: find.text('Нидерланды'),
+      ),
+      findsOneWidget,
     );
-    expect(selected.value, 'nl');
   });
 
   testWidgets(
@@ -220,10 +230,11 @@ void main() {
     await tester.pumpWidget(HyRouteApp(core: core));
     await tester.pumpAndSettle();
     expect(
-      tester
-          .widget<DropdownButton<String>>(find.byType(DropdownButton<String>))
-          .value,
-      'fi',
+      find.descendant(
+        of: find.byKey(const ValueKey('primary-profile')),
+        matching: find.text('Финляндия'),
+      ),
+      findsOneWidget,
     );
     await _tap(tester, 'Подписки');
     expect(find.text('Тестовая подписка'), findsOneWidget);
