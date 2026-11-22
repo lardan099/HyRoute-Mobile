@@ -102,6 +102,30 @@ func TestIOSChainRepairWithExistingUnavailableGeoRules(t *testing.T) {
 	if _, err := SaveClientSettings(state, changedRules, false); err == nil {
 		t.Fatal("a changed rule referencing missing data must still be rejected")
 	}
+
+	twoMissing := strings.Replace(updated, `"geosite:youtube"`, `"geosite:youtube","geoip:telegram","geoip:private"`, 1)
+	result := InspectIOSVPNPlan(twoMissing)
+	if result.Issue() != "geo" || result.GeoCategories() != `["geosite:youtube","geoip:telegram"]` {
+		t.Fatalf("geo diagnosis = %q, %q", result.Issue(), result.GeoCategories())
+	}
+	oneMissing := strings.Replace(settings, `"geosite:youtube"`, `"geoip:telegram","geoip:private"`, 1)
+	repaired, err := SaveClientSettings(twoMissing, oneMissing, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue := InspectIOSVPNPlan(repaired).Issue(); issue != "geo" {
+		t.Fatalf("remaining unavailable category must still block startup, issue = %q", issue)
+	}
+	if _, err := SaveClientSettings(twoMissing, changedRules, false); err == nil {
+		t.Fatal("a partial repair cannot introduce a new unavailable category")
+	}
+	repaired, err = SaveClientSettings(repaired, strings.Replace(oneMissing, `"geoip:telegram",`, "", 1), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue := InspectIOSVPNPlan(repaired).Issue(); issue != "" {
+		t.Fatalf("repaired routing must allow startup, issue = %q", issue)
+	}
 }
 
 func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {

@@ -34,8 +34,9 @@ var (
 // IOSVPNPlanResult carries a plan or a fixed diagnostic identifier. The
 // extension can report the latter even when it cannot write a shared journal.
 type IOSVPNPlanResult struct {
-	plan  *VPNPlan
-	issue string
+	plan          *VPNPlan
+	issue         string
+	geoCategories string
 }
 
 func InspectIOSVPNPlan(raw string) *IOSVPNPlanResult {
@@ -51,6 +52,13 @@ func InspectIOSVPNPlan(raw string) *IOSVPNPlanResult {
 		result.issue = "rules"
 	case errors.Is(err, errVPNGeodata):
 		result.issue = "geo"
+		var pending *unavailableGeoError
+		if errors.As(err, &pending) {
+			categories, marshalErr := json.Marshal(pending.categories)
+			if marshalErr == nil {
+				result.geoCategories = string(categories)
+			}
+		}
 	case errors.Is(err, errVPNReference):
 		result.issue = "reference"
 	case errors.Is(err, errVPNUnsupported):
@@ -61,8 +69,9 @@ func InspectIOSVPNPlan(raw string) *IOSVPNPlanResult {
 	return result
 }
 
-func (r *IOSVPNPlanResult) Plan() *VPNPlan { return r.plan }
-func (r *IOSVPNPlanResult) Issue() string  { return r.issue }
+func (r *IOSVPNPlanResult) Plan() *VPNPlan        { return r.plan }
+func (r *IOSVPNPlanResult) Issue() string         { return r.issue }
+func (r *IOSVPNPlanResult) GeoCategories() string { return r.geoCategories }
 
 type vpnProfile struct {
 	profile hysteria.Profile
@@ -128,7 +137,7 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 	router, err := newRouter(string(rawRules), settings.Selected, android)
 	if err != nil {
 		if errors.Is(err, errVPNGeodata) {
-			return nil, errVPNGeodata
+			return nil, err
 		}
 		return nil, errVPNRules
 	}

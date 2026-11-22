@@ -16,6 +16,12 @@ private actor NativeCore {
 
   func vpnState() throws -> String { try store.read() }
 
+  func unavailableGeo(in snapshot: String) -> [String] {
+    let raw = HyRouteUnavailableGeo(snapshot)
+    guard let categories = try? JSONDecoder().decode([String].self, from: Data(raw.utf8)) else { return [] }
+    return Set(categories).sorted()
+  }
+
   func journalPath() throws -> String {
     try store.prepareDirectory().appendingPathComponent("vpn-journal.json").path
   }
@@ -117,6 +123,14 @@ final class Client: ObservableObject {
   private func launchVPN() async {
     do {
       let snapshot = try await core.vpnState()
+      let unavailableGeo = await core.unavailableGeo(in: snapshot)
+      if !unavailableGeo.isEmpty {
+        await core.recordVPNError("vpn_geo_local_error", source: "HyRoute", code: Int32(TunnelStartError.geodata.rawValue))
+        let shown = unavailableGeo.prefix(4).joined(separator: ", ")
+        let extra = unavailableGeo.count > 4 ? " и ещё \(unavailableGeo.count - 4)" : ""
+        error = "Недоступны категории \(shown)\(extra). В «Правилах» откройте «Настройки», затем «Базы правил». Обновите базы или выберите доступные категории."
+        return
+      }
       do {
         try await requestTunnel(snapshot)
       } catch let error as NEVPNError where error.code == .configurationStale {

@@ -14,7 +14,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     worker.async {
       self.generation += 1
       let generation = self.generation
-      let geodata = VPNStorage.sharedGeodata ?? FileManager.default.temporaryDirectory
+      let sharedGeodata = VPNStorage.sharedGeodata
+      let geodata = sharedGeodata ?? FileManager.default.temporaryDirectory
         .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
       let journal = VPNStorage.tunnelJournal
       HyRouteRecordVPNEvent(journal, "vpn_provider_start")
@@ -25,7 +26,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       }
       var issue: NSString?
       guard let plan = HyRoutePlanVPN(state, geodata.path, &issue) else {
-        let failure = TunnelStartError.planFailure(issue as String?)
+        let failure = TunnelStartError.planFailure(issue as String?,
+          sharedGeodataAvailable: sharedGeodata != nil && FileManager.default.isReadableFile(atPath: geodata.path))
         HyRouteRecordVPNEvent(journal, failure.journalEvent)
         completionHandler(failure)
         return

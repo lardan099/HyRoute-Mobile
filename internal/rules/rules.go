@@ -233,16 +233,17 @@ func (d *domPat) alt(name string) (string, bool) {
 }
 
 type compiled struct {
-	src      Rule
-	name     string
-	apps     []appPat // empty = any application
-	doms     []domPat // names; with ips: the destinations (any = none)
-	ips      []ipPat  // addresses
-	warns    []string // unusable geosite:/geoip: items
-	proto    uint8    // 0 any
-	action   Action
-	profile  string   // "" = main
-	fallback []string // "" = main
+	src            Rule
+	name           string
+	apps           []appPat // empty = any application
+	doms           []domPat // names; with ips: the destinations (any = none)
+	ips            []ipPat  // addresses
+	warns          []string // unusable geosite:/geoip: items
+	unavailableGeo []string
+	proto          uint8 // 0 any
+	action         Action
+	profile        string   // "" = main
+	fallback       []string // "" = main
 	// ports: destination ports, sorted and merged; empty = any port.
 	ports []PortRange
 	// dns
@@ -275,7 +276,8 @@ type Set struct {
 	Main string
 	// Warnings list rule items that match nothing for now (a geosite:
 	// or geoip: category that is missing or not downloaded yet).
-	Warnings []string
+	Warnings       []string
+	UnavailableGeo []string // normalized categories from the same warnings
 	// ExactWeb: web connections (see WebPort) take their domain only from
 	// SNI/Host, never from the DNS cache. A CDN address shared by many
 	// sites may be cached under a neighbour's name when the application
@@ -334,6 +336,7 @@ func compileWith(c Config, g Geo) (*Set, error) {
 		for _, w := range cr.warns {
 			s.Warnings = append(s.Warnings, cr.name+": "+w)
 		}
+		s.UnavailableGeo = append(s.UnavailableGeo, cr.unavailableGeo...)
 		s.rules = append(s.rules, cr)
 	}
 	return s, nil
@@ -450,6 +453,7 @@ func compileRule(i int, r Rule, g Geo) (compiled, error) {
 			}
 			if warn != "" {
 				cr.warns = append(cr.warns, warn)
+				cr.unavailableGeo = append(cr.unavailableGeo, ip.src)
 			}
 			cr.ips = append(cr.ips, ip)
 			continue
@@ -463,6 +467,7 @@ func compileRule(i int, r Rule, g Geo) (compiled, error) {
 		}
 		if warn != "" {
 			cr.warns = append(cr.warns, warn)
+			cr.unavailableGeo = append(cr.unavailableGeo, d.src)
 		}
 		cr.doms = append(cr.doms, d)
 	}

@@ -28,6 +28,14 @@ type routingConfig struct {
 
 var errVPNGeodata = errors.New("недоступна категория GeoSite или GeoIP")
 
+type unavailableGeoError struct {
+	categories []string
+	warning    string
+}
+
+func (e *unavailableGeoError) Error() string { return e.warning }
+func (e *unavailableGeoError) Unwrap() error { return errVPNGeodata }
+
 // NewRouter compiles local Hyroute rules. An omitted default action blocks
 // unmatched traffic. A tunnel rule can use the selected server by omitting its
 // profile field.
@@ -69,7 +77,7 @@ func newRouter(localRulesJSON, selectedServerID string, android bool) (*Router, 
 		return nil, err
 	}
 	if len(set.Warnings) > 0 {
-		return nil, fmt.Errorf("%w: %s", errVPNGeodata, set.Warnings[0])
+		return nil, &unavailableGeoError{categories: set.UnavailableGeo, warning: set.Warnings[0]}
 	}
 	set.Main = selectedServerID
 	slices.Sort(packages)

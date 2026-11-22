@@ -25,5 +25,9 @@ struct VPNStartupTests {
     precondition(TunnelStartError(rawValue: error.code) == .preparation)
     precondition(TunnelStartError.planFailure("geo") == .geodata)
     precondition(TunnelStartError.planFailure("reference") == .missingReference)
+    precondition((TunnelStartError.geodata as NSError).code == 10)
+    precondition((TunnelStartError.missingReference as NSError).code == 11)
+    precondition(TunnelStartError.planFailure("geo", sharedGeodataAvailable: false) == .geodataSharedStorage)
+    precondition((TunnelStartError.geodataSharedStorage as NSError).code == 13)
   }
 }

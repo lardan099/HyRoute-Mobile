@@ -22,8 +22,9 @@ struct VPNStartup {
 }
 
 enum TunnelStartError: Int, CustomNSError {
-  case configuration = 1, preparation, networkSettings, engine, cancelled
-  case missingOptions, unreadableState, noProfile, rules, geodata, missingReference, unsupportedProfile
+  case configuration = 1, preparation = 2, networkSettings = 3, engine = 4, cancelled = 5
+  case missingOptions = 6, unreadableState = 7, noProfile = 8, rules = 9
+  case geodata = 10, missingReference = 11, unsupportedProfile = 12, geodataSharedStorage = 13
 
   static let errorDomain = "io.hyroute.packet-tunnel"
   var errorCode: Int { rawValue }
@@ -36,6 +37,7 @@ enum TunnelStartError: Int, CustomNSError {
     case .noProfile: return "vpn_profile_missing"
     case .rules: return "vpn_rules_error"
     case .geodata: return "vpn_geo_error"
+    case .geodataSharedStorage: return "vpn_geo_shared_error"
     case .missingReference: return "vpn_reference_missing"
     case .unsupportedProfile: return "vpn_profile_unsupported"
     case .preparation: return "vpn_prepare_error"
@@ -52,7 +54,8 @@ enum TunnelStartError: Int, CustomNSError {
     case .unreadableState: return "Расширение не смогло прочитать настройки HyRoute."
     case .noProfile: return "Выберите доступный профиль VPN на главном экране."
     case .rules: return "Не удалось применить локальные правила. Откройте «Правила» и проверьте условия."
-    case .geodata: return "Расширение не нашло базу или категорию GeoSite/GeoIP, которую используют правила."
+    case .geodata: return "Расширение не нашло базу или категорию GeoSite/GeoIP. Обновите базы в настройках правил."
+    case .geodataSharedStorage: return "VPN-расширению недоступно общее хранилище GeoSite/GeoIP. При установке IPA приложению и расширению нужен один App Group."
     case .missingReference: return "Правило или цепочка использует недоступный профиль. Откройте «Правила» и замените его или удалите связь."
     case .unsupportedProfile: return "Профиль содержит неподдерживаемые параметры соединения."
     case .preparation: return "Не удалось подготовить VPN. Проверьте доступность сервера и настройки профиля."
@@ -62,12 +65,12 @@ enum TunnelStartError: Int, CustomNSError {
     }
   }
 
-  static func planFailure(_ issue: String?) -> Self {
+  static func planFailure(_ issue: String?, sharedGeodataAvailable: Bool = true) -> Self {
     switch issue {
     case "state": return .unreadableState
     case "profile": return .noProfile
     case "rules": return .rules
-    case "geo": return .geodata
+    case "geo": return sharedGeodataAvailable ? .geodata : .geodataSharedStorage
     case "reference": return .missingReference
     case "unsupported": return .unsupportedProfile
     default: return .configuration

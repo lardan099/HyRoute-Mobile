@@ -150,13 +150,35 @@ func SaveClientSettings(raw, settingsJSON string, android bool) (string, error) 
 		return "", err
 	}
 	if _, err := newRouter(string(settings.Routing), settings.Selected, android); err != nil {
-		if android || !errors.Is(err, errVPNGeodata) || !sameRuleConfig(state.Settings.Routing, settings.Routing) {
+		var pending *unavailableGeoError
+		if android || !errors.As(err, &pending) ||
+			(!sameRuleConfig(state.Settings.Routing, settings.Routing) && !geoRepairProgress(state.Settings, pending)) {
 			return "", err
 		}
 	}
 	state.Settings = settings
 	data, err := json.Marshal(state)
 	return string(data), err
+}
+
+// Keep a partial repair when it removes missing destinations without adding any.
+func geoRepairProgress(previous clientSettings, pending *unavailableGeoError) bool {
+	_, err := newRouter(string(previous.Routing), previous.Selected, false)
+	var old *unavailableGeoError
+	if !errors.As(err, &old) || len(pending.categories) >= len(old.categories) {
+		return false
+	}
+	count := make(map[string]int)
+	for _, category := range old.categories {
+		count[category]++
+	}
+	for _, category := range pending.categories {
+		count[category]--
+		if count[category] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // A user can repair a profile chain or selection while an existing GeoIP or
