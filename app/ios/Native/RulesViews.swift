@@ -619,6 +619,7 @@ private struct GeoSourceEditor: View {
         Section("Ссылка на файл") {
           TextField("https://…", text: $address)
             .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            .accessibilityIdentifier("geo-source-address")
           if let error { Text(error).foregroundStyle(HyStyle.failure) }
           Button("Сохранить и скачать") { Task { await save(address) } }
             .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

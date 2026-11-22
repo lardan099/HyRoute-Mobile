@@ -69,7 +69,7 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.buttons["Импортировать файл"].exists)
     tap(app.buttons["Указать ссылку"])
     XCTAssertTrue(app.navigationBars["geosite.dat"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.textFields["https://…"].exists)
+    XCTAssertTrue(app.textFields["geo-source-address"].exists)
     XCTAssertTrue(app.buttons["Вернуть runetfreedom"].exists)
   }
 }
