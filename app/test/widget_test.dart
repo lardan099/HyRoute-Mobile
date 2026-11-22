@@ -80,12 +80,46 @@ class _TestCore implements ClientCore {
   }
 }
 
-Future<_TestCore> _openApp(WidgetTester tester) async {
+class _DiagnosticsTestCore extends _TestCore
+    implements VPNControl, DiagnosticsControl {
+  final probes = <(String, String)>[];
+
+  @override
+  bool get vpnAvailable => true;
+
+  @override
+  Future<String> vpnStatus() async => 'off';
+
+  @override
+  Future<void> startVpn() async {}
+
+  @override
+  Future<void> stopVpn() async {}
+
+  @override
+  Future<List<String>> vpnJournal() async => ['00:00:01  VPN отключён'];
+
+  @override
+  Future<ProbeSnapshot> startProbe(String scope, String id) {
+    probes.add((scope, id));
+    return probeStatus();
+  }
+
+  @override
+  Future<ProbeSnapshot> probeStatus() async => const ProbeSnapshot(true, [
+    {'name': 'Узел', 'host': 'vpn.example', 'status': 'ok', 'ms': 42},
+  ]);
+
+  @override
+  Future<void> cancelProbe() async {}
+}
+
+Future<_TestCore> _openApp(WidgetTester tester, {_TestCore? core}) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  final core = _TestCore();
+  core ??= _TestCore();
   await tester.pumpWidget(HyRouteApp(core: core));
   await tester.pumpAndSettle();
   return core;
@@ -112,6 +146,40 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('opens the VPN journal and checks servers at each scope', (
+    tester,
+  ) async {
+    final core = _DiagnosticsTestCore();
+    await _openApp(tester, core: core);
+    await _tap(tester, 'Журнал VPN');
+    expect(find.text('00:00:01  VPN отключён'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await _importTestSubscription(tester);
+    await _tap(tester, 'Тестовая подписка');
+    await _tap(tester, 'Обновить подписку');
+    await _tap(tester, 'Финляндия');
+    await _tap(tester, 'Проверить всю подписку');
+    expect(find.text('vpn.example · 42 мс'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Проверить узлы группы'));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Проверить задержку').first);
+    await tester.pumpAndSettle();
+    expect(core.probes, [
+      ('subscription', 'test'),
+      ('profile', 'auto'),
+      ('profile', 'nl'),
+    ]);
+    expect(core.state.settings.selected, 'fi');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('refresh makes the auto profile selectable', (tester) async {
     await _openApp(tester);
     await _importTestSubscription(tester);

@@ -28,11 +28,12 @@ class _VPNJournalPageState extends State<VPNJournalPage> {
   Future<void> _load() async {
     try {
       final lines = await widget.core.vpnJournal();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _lines = lines;
           _failed = false;
         });
+      }
     } on Exception {
       if (mounted) setState(() => _failed = true);
     } finally {
