@@ -1,5 +1,9 @@
 package io.hyroute.hyroute_mobile;
 
+import java.io.File;
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.plugin.common.BinaryMessenger;
@@ -32,19 +36,37 @@ public class MainActivity extends FlutterActivity {
 
     private void handleCoreCall(MethodCall call, MethodChannel.Result result) {
         try {
+            ClientStore store = new ClientStore(getNoBackupFilesDir());
             switch (call.method) {
-                case "importSubscription":
+                case "loadState":
+                    Mobile.configureGeo(new File(getNoBackupFilesDir(), "geo").getPath());
+                    result.success(Mobile.clientStateView(store.read()));
+                    break;
+                case "importSubscription": {
                     String input = call.argument("input");
                     boolean fromUrl = Boolean.TRUE.equals(call.argument("fromUrl"));
-                    result.success(Mobile.previewSubscription(input, fromUrl));
+                    String updated = Mobile.addClientSubscription(store.read(), input, fromUrl);
+                    String view = Mobile.clientStateView(updated);
+                    store.write(updated);
+                    result.success(view);
                     break;
-                case "validateRouting":
-                    Mobile.newAndroidRouter(call.argument("configuration"), call.argument("selectedServer"));
+                }
+                case "saveSettings":
+                    store.write(Mobile.saveClientSettings(store.read(), call.argument("settings"), true));
+                    result.success(null);
+                    break;
+                case "geoTags":
+                    result.success(Mobile.geoTags());
+                    break;
+                case "updateGeo":
+                    Mobile.updateGeo();
                     result.success(null);
                     break;
                 default:
                     result.notImplemented();
             }
+        } catch (IOException | GeneralSecurityException e) {
+            result.error("storage", null, null);
         } catch (Exception e) {
             result.error("core", null, null);
         }

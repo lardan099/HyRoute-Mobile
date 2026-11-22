@@ -5,13 +5,7 @@ import "encoding/json"
 // PreviewSubscription imports a subscription and returns display data without
 // passing connection credentials or the subscription URL to the UI.
 func PreviewSubscription(input string, fromURL bool) (string, error) {
-	var raw string
-	var err error
-	if fromURL {
-		raw, err = FetchSubscription(input)
-	} else {
-		raw, err = ImportSubscription([]byte(input))
-	}
+	raw, err := importInput(input, fromURL)
 	if err != nil {
 		return "", err
 	}
@@ -19,18 +13,34 @@ func PreviewSubscription(input string, fromURL bool) (string, error) {
 	if err := json.Unmarshal([]byte(raw), &imported); err != nil {
 		return "", err
 	}
-	type serverPreview struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
-		Host     string `json:"host,omitempty"`
-		Protocol string `json:"protocol,omitempty"`
-		Balance  bool   `json:"balance,omitempty"`
-		Missing  bool   `json:"missing,omitempty"`
+	data, err := json.Marshal(previewSubscription("", imported))
+	return string(data), err
+}
+
+func importInput(input string, fromURL bool) (string, error) {
+	if fromURL {
+		return FetchSubscription(input)
 	}
-	preview := struct {
-		Title   string          `json:"title,omitempty"`
-		Servers []serverPreview `json:"servers"`
-	}{Title: imported.Title}
+	return ImportSubscription([]byte(input))
+}
+
+type serverPreview struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Host     string `json:"host,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
+	Balance  bool   `json:"balance,omitempty"`
+	Missing  bool   `json:"missing,omitempty"`
+}
+
+type subscriptionPreview struct {
+	ID      string          `json:"id,omitempty"`
+	Title   string          `json:"title,omitempty"`
+	Servers []serverPreview `json:"servers"`
+}
+
+func previewSubscription(id string, imported importedSubscription) subscriptionPreview {
+	preview := subscriptionPreview{ID: id, Title: imported.Title}
 	for _, server := range imported.Servers {
 		preview.Servers = append(preview.Servers, serverPreview{
 			ID:       server.ID,
@@ -41,6 +51,5 @@ func PreviewSubscription(input string, fromURL bool) (string, error) {
 			Missing:  server.Missing,
 		})
 	}
-	data, err := json.Marshal(preview)
-	return string(data), err
+	return preview
 }

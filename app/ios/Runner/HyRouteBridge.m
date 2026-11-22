@@ -1,13 +1,35 @@
 #import "HyRouteBridge.h"
 #import <HyRouteCore/HyRouteCore.h>
 
-NSString * _Nullable HyRoutePreview(NSString *input, BOOL fromURL) {
+NSString * _Nullable HyRouteStateView(NSString *state) {
     NSError *error = nil;
-    NSString *preview = MobilePreviewSubscription(input, fromURL, &error);
-    return error == nil ? preview : nil;
+    NSString *view = MobileClientStateView(state, &error);
+    return error == nil ? view : nil;
 }
 
-BOOL HyRouteValidate(NSString *configuration, NSString *selectedServer) {
+NSString * _Nullable HyRouteAddSubscription(NSString *state, NSString *input, BOOL fromURL) {
     NSError *error = nil;
-    return MobileNewRouter(configuration, selectedServer, &error) != nil && error == nil;
+    NSString *updated = MobileAddClientSubscription(state, input, fromURL, &error);
+    return error == nil ? updated : nil;
+}
+
+NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings) {
+    NSError *error = nil;
+    NSString *updated = MobileSaveClientSettings(state, settings, NO, &error);
+    return error == nil ? updated : nil;
+}
+
+void HyRouteConfigureGeo(NSString *directory) {
+    MobileConfigureGeo(directory);
+}
+
+NSString * _Nullable HyRouteGeoTags(void) {
+    NSError *error = nil;
+    NSString *tags = MobileGeoTags(&error);
+    return error == nil ? tags : nil;
+}
+
+BOOL HyRouteUpdateGeo(void) {
+    NSError *error = nil;
+    return MobileUpdateGeo(&error);
 }

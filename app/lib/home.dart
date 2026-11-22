@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -16,7 +14,7 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  final _subscriptions = <Subscription>[];
+  var _subscriptions = <Subscription>[];
   var _rules = <RouteRule>[];
   var _via = <String, String>{};
   var _defaultAction = RouteAction.tunnel;
@@ -26,6 +24,41 @@ class _HomeState extends State<Home> {
   int _tab = 0;
   bool _importing = false;
   bool _validating = false;
+  bool _loading = true;
+  bool _storageFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadState();
+  }
+
+  Future<void> _loadState() async {
+    try {
+      final state = await widget.core.loadState();
+      if (mounted) setState(() => _restore(state));
+    } catch (_) {
+      if (mounted) setState(() => _storageFailed = true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _restore(ClientState state) {
+    _subscriptions = state.subscriptions;
+    final settings = state.settings;
+    _rules = settings.rules;
+    _via = settings.via;
+    _defaultAction = settings.defaultAction;
+    _scope = settings.scope;
+    _packages = settings.packages;
+    final servers = _servers;
+    _selected = servers.any((server) => server.id == settings.selected)
+        ? settings.selected
+        : (servers.where((server) => server.balance).firstOrNull ??
+                  servers.firstOrNull)
+              ?.id;
+  }
 
   List<Server> get _servers => [
     for (final subscription in _subscriptions)
@@ -46,6 +79,7 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> _import() async {
+    if (_importing || _validating) return;
     final input = await showDialog<String>(
       context: context,
       builder: (_) => const SubscriptionEditor(),
@@ -53,19 +87,18 @@ class _HomeState extends State<Home> {
     if (!mounted || input == null) return;
     setState(() => _importing = true);
     try {
-      final subscription = await widget.core.importSubscription(input);
+      final state = await widget.core.importSubscription(input);
       if (!mounted) return;
-      setState(() {
-        _subscriptions.add(subscription);
-        if (_selected == null && _servers.isNotEmpty) {
-          _selected = _servers.first.id;
-        }
-      });
+      setState(() => _restore(state));
     } on MissingPluginException {
       if (mounted) _notify('Для импорта нужна сборка с мобильным ядром.');
-    } on PlatformException {
+    } on PlatformException catch (error) {
       if (mounted) {
-        _notify('Импорт не удался. Проверьте ссылку или формат подписки.');
+        _notify(
+          error.code == 'storage'
+              ? 'Подписку не удалось сохранить. Проверьте хранилище устройства.'
+              : 'Импорт не удался. Проверьте ссылку или формат подписки.',
+        );
       }
     } on FormatException {
       if (mounted) _notify('Импорт не вернул серверы.');
@@ -74,33 +107,40 @@ class _HomeState extends State<Home> {
     }
   }
 
-  Future<void> _saveRouting({
+  Future<void> _saveSettings({
     List<RouteRule>? rules,
     RouteAction? defaultAction,
     Map<String, String>? via,
+    String? selected,
+    AppScope? scope,
+    List<String>? packages,
   }) async {
-    if (_validating) return;
-    final nextRules = rules ?? _rules;
-    final nextDefault = defaultAction ?? _defaultAction;
-    final nextVia = via ?? _via;
+    if (_validating || _importing) return;
+    final next = ClientSettings(
+      rules: rules ?? _rules,
+      defaultAction: defaultAction ?? _defaultAction,
+      via: via ?? _via,
+      selected: selected ?? _selected,
+      scope: scope ?? _scope,
+      packages: packages ?? _packages,
+    );
     setState(() => _validating = true);
     try {
-      await widget.core.validateRouting(
-        jsonEncode({
-          'defaultAction': nextDefault.value,
-          'rules': nextRules.map((rule) => rule.toJson()).toList(),
-          'viaProfiles': nextVia,
-        }),
-        _selected,
-      );
+      await widget.core.saveSettings(next);
       if (!mounted) return;
-      setState(() {
-        _rules = nextRules;
-        _defaultAction = nextDefault;
-        _via = nextVia;
-      });
-    } on PlatformException {
-      if (mounted) _notify('Проверьте адрес, порт и VPN-профиль в правиле.');
+      setState(
+        () => _restore(
+          ClientState(subscriptions: _subscriptions, settings: next),
+        ),
+      );
+    } on PlatformException catch (error) {
+      if (mounted) {
+        _notify(
+          error.code == 'storage'
+              ? 'Не удалось сохранить настройки.'
+              : 'Проверьте адрес, порт и VPN-профиль в правиле.',
+        );
+      }
     } on MissingPluginException {
       if (mounted) {
         _notify('Для проверки правил нужна сборка с мобильным ядром.');
@@ -110,12 +150,14 @@ class _HomeState extends State<Home> {
     }
   }
 
-  Future<void> _editRule([int? index]) async {
+  Future<void> _editRule([int? index, String? destination]) async {
     final edit = await showDialog<RouteRule>(
       context: context,
       builder: (_) => RuleEditor(
         servers: _servers,
         android: widget.core.supportsAndroidRules,
+        pickGeoTag: _pickGeoTag,
+        destination: destination,
         initial: index == null ? null : _rules[index],
       ),
     );
@@ -126,7 +168,17 @@ class _HomeState extends State<Home> {
     } else {
       next[index] = edit;
     }
-    await _saveRouting(rules: next);
+    await _saveSettings(rules: next);
+  }
+
+  Future<String?> _pickGeoTag() => showDialog<String>(
+    context: context,
+    builder: (_) => GeoCatalogDialog(core: widget.core),
+  );
+
+  Future<void> _openGeo() async {
+    final tag = await _pickGeoTag();
+    if (mounted && tag != null) await _editRule(null, tag);
   }
 
   Future<void> _editChain() async {
@@ -150,7 +202,7 @@ class _HomeState extends State<Home> {
         id = next[id];
       }
     }
-    await _saveRouting(via: next);
+    await _saveSettings(via: next);
   }
 
   Future<void> _editScope() async {
@@ -160,17 +212,15 @@ class _HomeState extends State<Home> {
     );
     if (!mounted || edit == null) return;
     final (scope, packages) = edit;
-    setState(() {
-      _scope = scope;
-      _packages = packages;
-    });
+    await _saveSettings(scope: scope, packages: packages);
   }
 
   void _ruleAction(int index, String action) {
     final next = [..._rules];
     final item = next.removeAt(index);
     if (action == 'up') next.insert(index - 1, item);
-    _saveRouting(rules: next);
+    if (action == 'down') next.insert(index + 1, item);
+    _saveSettings(rules: next);
   }
 
   @override
@@ -199,9 +249,25 @@ class _HomeState extends State<Home> {
             child: ListView(
               key: PageStorageKey(_tab),
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
-              children: switch (_tab) {
-                1 => _subscriptionPage(context),
-                2 => _rulesPage(context),
+              children: switch ((_loading, _storageFailed, _tab)) {
+                (true, _, _) => const [
+                  Center(child: CircularProgressIndicator()),
+                ],
+                (_, true, _) => [
+                  const Text('Не удалось открыть хранилище HyRoute.'),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _loading = true;
+                        _storageFailed = false;
+                      });
+                      _loadState();
+                    },
+                    child: const Text('Повторить'),
+                  ),
+                ],
+                (_, _, 1) => _subscriptionPage(context),
+                (_, _, 2) => _rulesPage(context),
                 _ => _connectionPage(context),
               },
             ),
@@ -253,7 +319,9 @@ class _HomeState extends State<Home> {
                     isExpanded: true,
                     value: _selected,
                     items: serverItems(servers),
-                    onChanged: (value) => setState(() => _selected = value),
+                    onChanged: _importing || _validating
+                        ? null
+                        : (value) => _saveSettings(selected: value),
                   ),
                 ),
               ),
@@ -282,10 +350,10 @@ class _HomeState extends State<Home> {
             subtitle: Text('Импортируйте HTTPS-ссылку, Hysteria 2 или VLESS.'),
           ),
         ),
-      for (final (index, subscription) in _subscriptions.indexed)
+      for (final subscription in _subscriptions)
         Card(
           child: ExpansionTile(
-            key: PageStorageKey('subscription:$index'),
+            key: PageStorageKey('subscription:${subscription.id}'),
             leading: const Icon(Icons.layers_outlined),
             title: Text(
               subscription.title.isEmpty
@@ -307,16 +375,16 @@ class _HomeState extends State<Home> {
                       ? const Icon(Icons.check_circle_outline)
                       : null,
                   enabled: !server.missing,
-                  onTap: server.missing
+                  onTap: server.missing || _importing || _validating
                       ? null
-                      : () => setState(() => _selected = server.id),
+                      : () => _saveSettings(selected: server.id),
                 ),
             ],
           ),
         ),
       const SizedBox(height: 12),
       FilledButton.icon(
-        onPressed: _importing ? null : _import,
+        onPressed: _importing || _validating ? null : _import,
         icon: _importing
             ? const SizedBox.square(
                 dimension: 16,
@@ -348,7 +416,7 @@ class _HomeState extends State<Home> {
                   .toList(),
               onChanged: _validating
                   ? null
-                  : (value) => _saveRouting(defaultAction: value),
+                  : (value) => _saveSettings(defaultAction: value),
             ),
           ),
         ),
@@ -363,6 +431,15 @@ class _HomeState extends State<Home> {
             onTap: _editScope,
           ),
         ),
+      Card(
+        child: ListTile(
+          leading: const Icon(Icons.public_rounded),
+          title: const Text('Базы правил'),
+          subtitle: const Text('GeoSite и GeoIP'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: _validating || _importing ? null : _openGeo,
+        ),
+      ),
       const _SectionTitle('Правила'),
       for (var index = 0; index < _rules.length; index++) _ruleTile(index),
       if (_rules.isEmpty)
@@ -421,6 +498,8 @@ class _HomeState extends State<Home> {
           itemBuilder: (_) => [
             if (index > 0)
               const PopupMenuItem(value: 'up', child: Text('Поднять выше')),
+            if (index < _rules.length - 1)
+              const PopupMenuItem(value: 'down', child: Text('Опустить ниже')),
             const PopupMenuItem(value: 'delete', child: Text('Удалить')),
           ],
         ),

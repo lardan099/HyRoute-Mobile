@@ -59,25 +59,126 @@ class RuleEditor extends StatefulWidget {
     super.key,
     required this.servers,
     required this.android,
+    required this.pickGeoTag,
+    this.destination,
     this.initial,
   });
 
   final List<Server> servers;
   final bool android;
+  final Future<String?> Function() pickGeoTag;
+  final String? destination;
   final RouteRule? initial;
 
   @override
   State<RuleEditor> createState() => _RuleEditorState();
 }
 
+class GeoCatalogDialog extends StatefulWidget {
+  const GeoCatalogDialog({super.key, required this.core});
+
+  final ClientCore core;
+
+  @override
+  State<GeoCatalogDialog> createState() => _GeoCatalogDialogState();
+}
+
+class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
+  var _tags = <String>[];
+  var _query = '';
+  var _busy = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load({bool update = false}) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      if (update) await widget.core.updateGeo();
+      final tags = await widget.core.geoTags();
+      if (mounted) setState(() => _tags = tags);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = update
+              ? 'Не удалось обновить базы правил. Проверьте интернет.'
+              : 'Не удалось прочитать базы правил.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = _tags.where((tag) => tag.contains(_query)).toList();
+    return AlertDialog(
+      title: const Text('GeoSite и GeoIP'),
+      content: SizedBox(
+        width: 400,
+        height: 300,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Источник runetfreedom · загрузка около 90 МБ'),
+            const SizedBox(height: 12),
+            if (_busy) const LinearProgressIndicator(),
+            if (_error case final error?) Text(error),
+            if (_tags.isNotEmpty) ...[
+              TextField(
+                autocorrect: false,
+                onChanged: (value) =>
+                    setState(() => _query = value.trim().toLowerCase()),
+                decoration: const InputDecoration(labelText: 'Поиск категории'),
+              ),
+              Expanded(
+                child: matches.isEmpty
+                    ? const Center(child: Text('Категория не найдена.'))
+                    : ListView.builder(
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) => ListTile(
+                          dense: true,
+                          title: Text(matches[index]),
+                          onTap: () => Navigator.pop(context, matches[index]),
+                        ),
+                      ),
+              ),
+            ] else if (!_busy && _error == null)
+              const Text('Скачайте базы, чтобы выбрать категорию.'),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Закрыть'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : () => _load(update: true),
+          child: Text(_tags.isEmpty ? 'Скачать' : 'Обновить'),
+        ),
+      ],
+    );
+  }
+}
+
 class _RuleEditorState extends State<RuleEditor> {
   late final _destination = TextEditingController(
-    text: widget.initial?.destination,
+    text: widget.initial?.destination ?? widget.destination,
   );
   late final _port = TextEditingController(text: widget.initial?.port);
   late final _package = TextEditingController(text: widget.initial?.package);
   late RouteAction _action = widget.initial?.action ?? RouteAction.tunnel;
   late String _server = widget.initial?.server ?? '';
+  late String _protocol = widget.initial?.protocol ?? '';
   String? _error;
 
   @override
@@ -92,8 +193,13 @@ class _RuleEditorState extends State<RuleEditor> {
     final destination = _destination.text.trim();
     final port = _port.text.trim();
     final package = widget.android ? _package.text.trim() : '';
-    if (destination.isEmpty && port.isEmpty && package.isEmpty) {
-      setState(() => _error = 'Укажите домен, IP, порт или приложение.');
+    if (destination.isEmpty &&
+        port.isEmpty &&
+        package.isEmpty &&
+        _protocol.isEmpty) {
+      setState(
+        () => _error = 'Укажите домен, IP, порт, протокол или приложение.',
+      );
       return;
     }
     if (package.isNotEmpty && !_packageId.hasMatch(package)) {
@@ -108,8 +214,17 @@ class _RuleEditorState extends State<RuleEditor> {
         port: port,
         package: package,
         server: _action == RouteAction.tunnel ? _server : '',
+        protocol: _protocol,
       ),
     );
+  }
+
+  Future<void> _addGeoTag() async {
+    final tag = await widget.pickGeoTag();
+    if (!mounted || tag == null) return;
+    final current = _destination.text.trim();
+    if (current.split('\n').any((line) => line.trim() == tag)) return;
+    _destination.text = current.isEmpty ? tag : '$current\n$tag';
   }
 
   @override
@@ -123,9 +238,20 @@ class _RuleEditorState extends State<RuleEditor> {
           TextField(
             controller: _destination,
             autocorrect: false,
+            minLines: 2,
+            maxLines: 4,
             decoration: const InputDecoration(
-              labelText: 'Домен или IP',
+              labelText: 'Домены, IP и категории',
               hintText: '.example.org',
+              helperText: 'По одному на строку',
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _addGeoTag,
+              icon: const Icon(Icons.public_rounded),
+              label: const Text('Выбрать GeoSite или GeoIP'),
             ),
           ),
           const SizedBox(height: 12),
@@ -136,6 +262,17 @@ class _RuleEditorState extends State<RuleEditor> {
               labelText: 'Порт или диапазон',
               hintText: '443',
             ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _protocol,
+            decoration: const InputDecoration(labelText: 'Протокол'),
+            items: const [
+              DropdownMenuItem(value: '', child: Text('Любой')),
+              DropdownMenuItem(value: 'tcp', child: Text('TCP')),
+              DropdownMenuItem(value: 'udp', child: Text('UDP')),
+            ],
+            onChanged: (value) => _protocol = value!,
           ),
           if (widget.android) ...[
             const SizedBox(height: 12),

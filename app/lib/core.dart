@@ -5,8 +5,11 @@ import 'package:flutter/services.dart';
 
 abstract interface class ClientCore {
   bool get supportsAndroidRules;
-  Future<Subscription> importSubscription(String input);
-  Future<void> validateRouting(String configuration, String? selectedServer);
+  Future<ClientState> loadState();
+  Future<ClientState> importSubscription(String input);
+  Future<void> saveSettings(ClientSettings settings);
+  Future<List<String>> geoTags();
+  Future<void> updateGeo();
 }
 
 class PlatformCore implements ClientCore {
@@ -19,27 +22,39 @@ class PlatformCore implements ClientCore {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   @override
-  Future<Subscription> importSubscription(String input) async {
+  Future<ClientState> loadState() async {
+    if (kIsWeb) return const ClientState();
+    final result = await _channel.invokeMethod<String>('loadState');
+    return ClientState.decode(result);
+  }
+
+  @override
+  Future<ClientState> importSubscription(String input) async {
     final uri = Uri.tryParse(input);
     final result = await _channel.invokeMethod<String>('importSubscription', {
       'input': input,
       'fromUrl': uri?.scheme == 'https' && !input.contains(RegExp(r'\s')),
     });
-    if (result == null) throw const FormatException('Missing subscription');
-    return Subscription.fromJson(jsonDecode(result) as Map<String, dynamic>);
+    return ClientState.decode(result);
   }
 
   @override
-  Future<void> validateRouting(
-    String configuration,
-    String? selectedServer,
-  ) async {
+  Future<void> saveSettings(ClientSettings settings) async {
     if (kIsWeb) return;
-    await _channel.invokeMethod<void>('validateRouting', {
-      'configuration': configuration,
-      'selectedServer': selectedServer ?? '',
+    await _channel.invokeMethod<void>('saveSettings', {
+      'settings': jsonEncode(settings.toJson()),
     });
   }
+
+  @override
+  Future<List<String>> geoTags() async {
+    final raw = await _channel.invokeMethod<String>('geoTags');
+    if (raw == null) throw const FormatException('Missing geodata');
+    return (jsonDecode(raw) as List<dynamic>).cast<String>();
+  }
+
+  @override
+  Future<void> updateGeo() => _channel.invokeMethod<void>('updateGeo');
 }
 
 class Server {
@@ -49,6 +64,7 @@ class Server {
     required this.protocol,
     this.host = '',
     this.missing = false,
+    this.balance = false,
   });
 
   factory Server.fromJson(Map<String, dynamic> json) {
@@ -64,6 +80,7 @@ class Server {
         _ => 'Hysteria 2',
       },
       missing: json['missing'] == true,
+      balance: json['balance'] == true,
     );
   }
 
@@ -72,10 +89,15 @@ class Server {
   final String host;
   final String protocol;
   final bool missing;
+  final bool balance;
 }
 
 class Subscription {
-  const Subscription({required this.servers, this.title = ''});
+  const Subscription({
+    required this.id,
+    required this.servers,
+    this.title = '',
+  });
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
     final servers = (json['servers'] as List<dynamic>)
@@ -83,13 +105,86 @@ class Subscription {
         .toList(growable: false);
     if (servers.isEmpty) throw const FormatException('Missing servers');
     return Subscription(
+      id: json['id'] as String,
       servers: servers,
       title: json['title'] as String? ?? '',
     );
   }
 
   final List<Server> servers;
+  final String id;
   final String title;
+}
+
+class ClientState {
+  const ClientState({
+    this.subscriptions = const [],
+    this.settings = const ClientSettings(),
+  });
+
+  factory ClientState.decode(String? raw) {
+    if (raw == null) throw const FormatException('Missing client state');
+    final json = jsonDecode(raw) as Map<String, dynamic>;
+    return ClientState(
+      subscriptions: (json['subscriptions'] as List<dynamic>)
+          .map((item) => Subscription.fromJson(item as Map<String, dynamic>))
+          .toList(growable: false),
+      settings: ClientSettings.fromJson(
+        json['settings'] as Map<String, dynamic>,
+      ),
+    );
+  }
+
+  final List<Subscription> subscriptions;
+  final ClientSettings settings;
+}
+
+class ClientSettings {
+  const ClientSettings({
+    this.selected,
+    this.rules = const [],
+    this.defaultAction = RouteAction.tunnel,
+    this.via = const {},
+    this.scope = AppScope.all,
+    this.packages = const [],
+  });
+
+  factory ClientSettings.fromJson(Map<String, dynamic> json) {
+    final routing = json['routing'] as Map<String, dynamic>? ?? const {};
+    return ClientSettings(
+      selected: json['selected'] as String?,
+      rules: (routing['rules'] as List<dynamic>? ?? const [])
+          .map((item) => RouteRule.fromJson(item as Map<String, dynamic>))
+          .toList(growable: false),
+      defaultAction: RouteAction.fromValue(routing['defaultAction']),
+      via: (routing['viaProfiles'] as Map<String, dynamic>? ?? const {})
+          .cast<String, String>(),
+      scope: AppScope.values.firstWhere(
+        (value) => value.name == json['appScope'],
+        orElse: () => AppScope.all,
+      ),
+      packages: (json['appPackages'] as List<dynamic>? ?? const [])
+          .cast<String>(),
+    );
+  }
+
+  final String? selected;
+  final List<RouteRule> rules;
+  final RouteAction defaultAction;
+  final Map<String, String> via;
+  final AppScope scope;
+  final List<String> packages;
+
+  Map<String, Object> toJson() => {
+    'selected': ?selected,
+    'routing': {
+      'defaultAction': defaultAction.value,
+      'rules': rules.map((rule) => rule.toJson()).toList(),
+      'viaProfiles': via,
+    },
+    'appScope': scope.name,
+    'appPackages': packages,
+  };
 }
 
 enum RouteAction {
@@ -98,6 +193,10 @@ enum RouteAction {
   block('Блокировать', 'block');
 
   const RouteAction(this.label, this.value);
+  static RouteAction fromValue(Object? value) => values.firstWhere(
+    (action) => action.value == value,
+    orElse: () => tunnel,
+  );
   final String label;
   final String value;
 }
@@ -109,29 +208,50 @@ class RouteRule {
     this.port = '',
     this.package = '',
     this.server = '',
+    this.protocol = '',
   });
+
+  factory RouteRule.fromJson(Map<String, dynamic> json) {
+    final apps = json['apps'] as List<dynamic>? ?? const [];
+    return RouteRule(
+      action: RouteAction.fromValue(json['action']),
+      destination: (json['domains'] as List<dynamic>? ?? const []).join('\n'),
+      port: json['ports'] as String? ?? '',
+      package: apps.isEmpty ? '' : apps.first['pattern'] as String,
+      server: json['profile'] as String? ?? '',
+      protocol: json['protocol'] as String? ?? '',
+    );
+  }
 
   final RouteAction action;
   final String destination;
   final String port;
   final String package;
   final String server;
+  final String protocol;
 
   String get title => [
-    if (destination.isNotEmpty) destination,
+    if (destination.isNotEmpty) destination.replaceAll('\n', ', '),
     if (package.isNotEmpty) package,
     if (port.isNotEmpty) 'Порт $port',
+    if (protocol.isNotEmpty) protocol.toUpperCase(),
   ].join(' · ');
 
   Map<String, Object> toJson() => {
     'action': action.value,
-    if (destination.isNotEmpty) 'domains': [destination],
+    if (destination.isNotEmpty)
+      'domains': destination
+          .split('\n')
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toList(),
     if (port.isNotEmpty) 'ports': port,
     if (package.isNotEmpty)
       'apps': [
         {'kind': 'package', 'pattern': package},
       ],
     if (action == RouteAction.tunnel && server.isNotEmpty) 'profile': server,
+    if (protocol.isNotEmpty) 'protocol': protocol,
   };
 }
 

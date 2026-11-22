@@ -8,28 +8,41 @@ import 'package:hyroute_mobile/main.dart';
 class _TestCore implements ClientCore {
   String? configuration;
   String? input;
+  var state = const ClientState();
 
   @override
   bool get supportsAndroidRules => true;
 
   @override
-  Future<Subscription> importSubscription(String input) async {
+  Future<ClientState> loadState() async => state;
+
+  @override
+  Future<List<String>> geoTags() async => ['geosite:youtube', 'geoip:ru'];
+
+  @override
+  Future<void> updateGeo() async {}
+
+  @override
+  Future<ClientState> importSubscription(String input) async {
     this.input = input;
-    return const Subscription(
+    const subscription = Subscription(
+      id: 'test',
       title: 'Тестовая подписка',
       servers: [
         Server(id: 'nl', name: 'Нидерланды', protocol: 'Hysteria 2'),
         Server(id: 'fi', name: 'Финляндия', protocol: 'VLESS'),
       ],
     );
+    return state = ClientState(
+      subscriptions: [...state.subscriptions, subscription],
+      settings: state.settings,
+    );
   }
 
   @override
-  Future<void> validateRouting(
-    String configuration,
-    String? selectedServer,
-  ) async {
-    this.configuration = configuration;
+  Future<void> saveSettings(ClientSettings settings) async {
+    configuration = jsonEncode(settings.toJson()['routing']);
+    state = ClientState(subscriptions: state.subscriptions, settings: settings);
   }
 }
 
@@ -65,6 +78,18 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('adds a geosite category from the rule editor', (tester) async {
+    final core = await _openApp(tester);
+    await _tap(tester, 'Правила');
+    await _tap(tester, 'Добавить правило');
+    await _tap(tester, 'Выбрать GeoSite или GeoIP');
+    await _tap(tester, 'geosite:youtube');
+    await _tap(tester, 'Сохранить');
+    expect(jsonDecode(core.configuration!)['rules'].single['domains'], [
+      'geosite:youtube',
+    ]);
+  });
+
   testWidgets('imports after the subscription tab saves its scroll offset', (
     tester,
   ) async {
@@ -146,5 +171,23 @@ void main() {
     await tester.enterText(find.byType(TextField), 'org.example.app');
     await _tap(tester, 'Сохранить');
     expect(find.text('Только выбранные'), findsOneWidget);
+
+    await _tap(tester, 'Подписки');
+    await _tap(tester, 'Тестовая подписка');
+    await _tap(tester, 'Финляндия');
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(HyRouteApp(core: core));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<DropdownButton<String>>(find.byType(DropdownButton<String>))
+          .value,
+      'fi',
+    );
+    await _tap(tester, 'Подписки');
+    expect(find.text('Тестовая подписка'), findsOneWidget);
+    await _tap(tester, 'Правила');
+    expect(find.text('Только выбранные'), findsOneWidget);
+    expect(find.text('Нидерланды через Финляндия'), findsOneWidget);
   });
 }
