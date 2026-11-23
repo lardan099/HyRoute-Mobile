@@ -22,15 +22,19 @@ on:
         options:
           - macos-latest
           - macos-26-intel
+      ios_bindings_run:
+        description: Reuse iOS bindings from a run with the same Go sources
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.platform == 'iOS' && inputs.ios_runner || 'ubuntu-24.04' }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.platform == 'iOS' && inputs.ios_runner == 'macos-26-intel' && 50 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +49,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.ios_bindings_run != '' && '0' || '1' }}
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.27.x'
@@ -82,6 +87,7 @@ jobs:
             printf 'HYROUTE_ANDROID_NDK_VERSION=%s\n' "$ndk_version"
           } >> "$GITHUB_ENV"
       - name: Build bindings
+        if: matrix.platform != 'iOS' || inputs.ios_bindings_run == ''
         shell: bash
         run: |
           mkdir -p dist
@@ -91,6 +97,22 @@ jobs:
             link_flags+=(-ldflags=-checklinkname=0)
           fi
           gomobile bind -trimpath "${link_flags[@]}" -androidapi 24 -target "$MOBILE_TARGET" -o "dist/$MOBILE_OUTPUT" ./mobile
+      - name: Reuse verified iOS bindings
+        if: matrix.platform == 'iOS' && inputs.ios_bindings_run != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IOS_BINDINGS_RUN: ${{ inputs.ios_bindings_run }}
+        run: |
+          [[ "$IOS_BINDINGS_RUN" =~ ^[0-9]+$ ]]
+          source="$(gh run view "$IOS_BINDINGS_RUN" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)"
+          git diff --exit-code "$source" "$GITHUB_SHA" -- go.mod go.sum internal mobile
+          mkdir -p dist
+          download="$(mktemp -d)"
+          gh run download "$IOS_BINDINGS_RUN" --repo "$GITHUB_REPOSITORY" --name HyRouteCore-iOS --dir "$download"
+          framework="$(find "$download" -type d -name HyRouteCore.xcframework -print -quit)"
+          mv "${framework:-$download}" "dist/$MOBILE_OUTPUT"
+          test -f "dist/$MOBILE_OUTPUT/Info.plist"
       - name: Build Android routing adapter
         if: matrix.platform == 'Android'
         shell: bash
@@ -101,6 +123,7 @@ jobs:
             -d "$work/classes" mobile/android/src/main/java/io/hyroute/mobile/AndroidRouting.java
           jar cf dist/HyRouteAndroidRouting.jar -C "$work/classes" .
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.platform != 'iOS' || inputs.ios_bindings_run == ''
         with:
           name: HyRouteCore-${{ matrix.platform }}
           path: |
@@ -186,7 +209,7 @@ jobs:
       - name: Test SwiftUI and capture iPhone previews
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios
-        timeout-minutes: 18
+        timeout-minutes: ${{ inputs.ios_runner == 'macos-26-intel' && 28 || 18 }}
         shell: bash
         run: |
           device="$HYROUTE_SIMULATOR"
