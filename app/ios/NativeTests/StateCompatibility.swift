@@ -47,5 +47,10 @@ struct StateCompatibility {
     precondition(RuleDomainCondition.suffix.value(from: ".ru") == ".ru")
     precondition(RuleDomainCondition.contains.value(from: "keyword:pzdcflix") == "pzdcflix")
     precondition(RuleDomainCondition.summary("regexp:^demo") == "regexp:^demo")
+    let events = Data(#"[{"at":0,"message":"VPN"}]"#.utf8)
+    let plusFive = try VPNJournalEvent.lines(events, timeZone: TimeZone(secondsFromGMT: 5 * 3600)!)
+    let minusFive = try VPNJournalEvent.lines(events, timeZone: TimeZone(secondsFromGMT: -5 * 3600)!)
+    precondition(plusFive == ["01.01 05:00:00  VPN"])
+    precondition(minusFive == ["31.12 19:00:00  VPN"])
   }
 }

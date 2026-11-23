@@ -212,6 +212,16 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  test('formats VPN journal timestamps with the device clock', () {
+    final at = DateTime(2026, 11, 23, 1, 25, 34).millisecondsSinceEpoch;
+    final result = formatVpnJournal(
+      jsonEncode([
+        {'at': at, 'message': 'Интерфейс VPN включён'},
+      ]),
+    );
+    expect(result, ['23.11 01:25:34  Интерфейс VPN включён']);
+  });
+
   testWidgets('adds and edits plain domain suffix and keyword conditions', (
     tester,
   ) async {

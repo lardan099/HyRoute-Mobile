@@ -8,7 +8,7 @@ enum GeodataKind: String, Codable {
 }
 
 struct GeodataTransfer: Codable {
-  enum Action: String, Codable { case begin, append, finish, clear, cancel }
+  enum Action: String, Codable { case begin, append, finish, clear, cancel, checkRecovery }
 
   static let chunkSize = 48 * 1024
   static let maximumSize = 300 * 1024 * 1024
@@ -105,6 +105,8 @@ final class GeodataReceiver {
   private func process(_ request: GeodataTransfer) throws -> GeodataTransfer.Reply? {
     let files = FileManager.default
     switch request.action {
+    case .checkRecovery:
+      return nil
     case .begin:
       guard let kind = request.kind, let expected = request.fingerprint, expected.isValid else { return nil }
       abort()

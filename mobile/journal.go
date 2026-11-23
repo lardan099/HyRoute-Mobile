@@ -123,19 +123,39 @@ func readJournal(path string) []journalEntry {
 	return entries
 }
 
-// VPNJournal combines app and extension events, newest first. The two paths
-// have separate owners and never share a writer across processes.
-func VPNJournal(appPath, tunnelPath string) string {
+type journalEventView struct {
+	At      int64  `json:"at"`
+	Message string `json:"message"`
+}
+
+func journalEvents(appPath, tunnelPath string) []journalEventView {
 	entries := append(readJournal(appPath), readJournal(tunnelPath)...)
 	slices.SortStableFunc(entries, func(a, b journalEntry) int { return time.UnixMilli(b.At).Compare(time.UnixMilli(a.At)) })
-	lines := make([]string, 0, min(journalLimit, len(entries)))
+	views := make([]journalEventView, 0, min(journalLimit, len(entries)))
 	for _, entry := range entries[:min(journalLimit, len(entries))] {
 		if message := journalMessages[entry.Event]; message != "" {
 			if entry.Code != nil {
 				message += fmt.Sprintf(" (%s, код %d)", entry.Source, *entry.Code)
 			}
-			lines = append(lines, time.UnixMilli(entry.At).Format("02.01 15:04:05")+"  "+message)
+			views = append(views, journalEventView{At: entry.At, Message: message})
 		}
+	}
+	return views
+}
+
+// VPNJournalEvents combines app and extension events, newest first. The two
+// paths have separate writers. Timestamps remain absolute for device formatting.
+func VPNJournalEvents(appPath, tunnelPath string) string {
+	data, _ := json.Marshal(journalEvents(appPath, tunnelPath))
+	return string(data)
+}
+
+// VPNJournal returns formatted lines for callers that do not format their own dates.
+func VPNJournal(appPath, tunnelPath string) string {
+	events := journalEvents(appPath, tunnelPath)
+	lines := make([]string, 0, len(events))
+	for _, event := range events {
+		lines = append(lines, time.UnixMilli(event.At).Format("02.01 15:04:05")+"  "+event.Message)
 	}
 	data, _ := json.Marshal(lines)
 	return string(data)

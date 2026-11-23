@@ -107,3 +107,18 @@ func TestVPNJournalKeepsOnlySafeSystemErrorDetails(t *testing.T) {
 		t.Fatalf("unexpected error details in journal: %s", log)
 	}
 }
+
+func TestVPNJournalEventsKeepAbsoluteTime(t *testing.T) {
+	dir := t.TempDir()
+	app, provider := filepath.Join(dir, "app.json"), filepath.Join(dir, "provider.json")
+	const first = int64(1795386334000)
+	appendJournal(app, journalEntry{At: first, Event: "vpn_request"})
+	appendJournal(provider, journalEntry{At: first + 300, Event: "vpn_running"})
+	var events []journalEventView
+	if err := json.Unmarshal([]byte(VPNJournalEvents(app, provider)), &events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].At != first+300 || events[1].At != first || events[0].Message != journalMessages["vpn_running"] {
+		t.Fatalf("unexpected journal: %+v", events)
+	}
+}

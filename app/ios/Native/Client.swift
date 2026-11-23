@@ -65,8 +65,8 @@ actor NativeCore {
   }
 
   func journal() throws -> [String] {
-    let raw = HyRouteVPNJournal(try journalPath(), VPNStorage.tunnelJournal)
-    return try JSONDecoder().decode([String].self, from: Data(raw.utf8))
+    let raw = HyRouteVPNJournalEvents(try journalPath(), VPNStorage.tunnelJournal)
+    return try VPNJournalEvent.lines(Data(raw.utf8))
   }
 
   func importSubscription(_ input: String) throws -> ClientState {
@@ -164,7 +164,6 @@ final class Client: ObservableObject {
   private var attemptID = UUID()
   private var stoppingVPN = false
   private var mayRetryExtension = false
-  private var needsPrivateGeodata = false
   private var updatingAutomatically = false
   private var stateRevision = 0
   @Published private(set) var state = ClientState()
@@ -246,55 +245,78 @@ final class Client: ObservableObject {
 
   private func requestTunnel(_ snapshot: String) async throws {
     let current = try await vpnManager()
+    if !current.isEnabled {
+      await core.record("vpn_permission")
+      current.isEnabled = true
+      try await saveVPNPreferences(current)
+    }
+    manager = current
     guard let configuration = current.protocolConfiguration as? NETunnelProviderProtocol else {
       throw CoreError.invalidResult
     }
+
+    // A manual start may be offered even if another signing tool gave the
+    // application and the provider different access to their shared container.
+    let activeStatuses: [NEVPNStatus] = [.connecting, .connected, .reasserting]
+    guard let session = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
+    guard !activeStatuses.contains(session.status) else { return }
+
     if autoReconnect {
-      do { try await core.prepareRecovery() }
-      catch { throw ClientMessage(text: "Нет доступа к общему хранилищу VPN. Проверьте разрешения App Groups при подписи IPA.") }
+      do {
+        try await core.prepareRecovery()
+        let check = GeodataTransfer(action: .checkRecovery, token: UUID())
+        guard try await sendGeodataCommand(check, to: session) == .ready else { throw CoreError.invalidResult }
+      } catch {
+        await core.record("vpn_recovery_storage_error")
+        throw ClientMessage(text: "Расширению недоступно хранилище для автозапуска. Отключите автовосстановление в «Защите VPN» и подключитесь вручную.")
+      }
     }
     let block = autoReconnect && blockOnDrop
-    if !current.isEnabled || current.isOnDemandEnabled != autoReconnect || configuration.includeAllNetworks != block {
-      if !current.isEnabled { await core.record("vpn_permission") }
-      current.isEnabled = true
+    if current.isOnDemandEnabled != autoReconnect || configuration.includeAllNetworks != block {
       current.isOnDemandEnabled = autoReconnect
       current.onDemandRules = autoReconnect ? [NEOnDemandRuleConnect()] : []
       configuration.includeAllNetworks = block
       configuration.providerConfiguration = ["recovery": autoReconnect]
       current.protocolConfiguration = configuration
-      try await current.saveToPreferences()
-      try await current.loadFromPreferences()
+      try await saveVPNPreferences(current)
     }
-    manager = current
-    guard let session = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
-    guard ![.connecting, .connected, .reasserting].contains(session.status) else { return }
-    var options: [String: NSObject] = ["state": snapshot as NSString]
-    if !autoReconnect && (needsPrivateGeodata || !VPNStorage.canRecover) {
-      let kinds = HyRouteVPNGeodataKinds(snapshot).split(separator: "\n").compactMap {
-        GeodataKind(rawValue: String($0))
-      }
-      if !kinds.isEmpty {
-        await core.record("vpn_geo_transfer")
-        do {
-          let directory = try await core.geodataDirectory()
-          let encoder = PropertyListEncoder()
-          encoder.outputFormat = .binary
-          for kind in kinds {
-            try await GeodataTransfer.send(kind, from: directory) { command in
-              let response = try await session.hyRouteMessage(encoder.encode(command))
-              guard response.count == 1, let byte = response.first,
-                    let reply = GeodataTransfer.Reply(rawValue: byte) else { throw CoreError.invalidResult }
-              return reply
-            }
-          }
-        } catch {
-          await core.record("vpn_geo_transfer_error")
-          throw ClientMessage(text: "Не удалось передать базы правил VPN-расширению. Повторите подключение.")
+    guard let updatedSession = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
+    guard !activeStatuses.contains(updatedSession.status) else { return }
+    try await synchronizeGeodata(snapshot, with: updatedSession)
+    try updatedSession.startTunnel(options: ["state": snapshot as NSString])
+  }
+
+  private func synchronizeGeodata(_ snapshot: String, with session: NETunnelProviderSession) async throws {
+    let kinds = HyRouteVPNGeodataKinds(snapshot).split(separator: "\n").compactMap {
+      GeodataKind(rawValue: String($0))
+    }
+    guard !kinds.isEmpty else { return }
+    await core.record("vpn_geo_transfer")
+    do {
+      let directory = try await core.geodataDirectory()
+      for kind in kinds {
+        try await GeodataTransfer.send(kind, from: directory) { command in
+          try await self.sendGeodataCommand(command, to: session)
         }
-        options["privateGeodata"] = NSNumber(value: true)
       }
+    } catch {
+      await core.record("vpn_geo_transfer_error")
+      throw ClientMessage(text: "Не удалось передать базы правил VPN-расширению. Повторите подключение.")
     }
-    try session.startTunnel(options: options)
+  }
+
+  private func sendGeodataCommand(_ command: GeodataTransfer, to session: NETunnelProviderSession) async throws -> GeodataTransfer.Reply {
+    let encoder = PropertyListEncoder()
+    encoder.outputFormat = .binary
+    let response = try await session.hyRouteMessage(encoder.encode(command))
+    guard response.count == 1, let byte = response.first,
+          let reply = GeodataTransfer.Reply(rawValue: byte) else { throw CoreError.invalidResult }
+    return reply
+  }
+
+  private func saveVPNPreferences(_ manager: NETunnelProviderManager) async throws {
+    try await manager.saveToPreferences()
+    try await manager.loadFromPreferences()
   }
 
   var canEditVPNRecovery: Bool {
@@ -331,8 +353,7 @@ final class Client: ObservableObject {
     if current.isOnDemandEnabled {
       current.isOnDemandEnabled = false
       current.onDemandRules = []
-      try await current.saveToPreferences()
-      try await current.loadFromPreferences()
+      try await saveVPNPreferences(current)
     }
     manager = current
     do { try await core.clearRecovery() }
@@ -422,17 +443,6 @@ final class Client: ObservableObject {
         await self.logVPNError(error, event: "vpn_ios_error")
         guard self.attemptID == attempt, self.vpnStatus != .connected else { return }
         let detail = error as NSError
-        if event == "vpn_start_failed", !self.autoReconnect, !self.needsPrivateGeodata, VPNStorage.canRecover,
-           [.disconnected, .invalid].contains(self.vpnStatus),
-           detail.domain == TunnelStartError.errorDomain,
-           [TunnelStartError.geodataSharedStorage.rawValue, TunnelStartError.geodata.rawValue].contains(detail.code) {
-          self.needsPrivateGeodata = true
-          self.error = nil
-          self.vpnBusy = true
-          defer { self.vpnBusy = false }
-          await self.launchVPN()
-          return
-        }
         if event == "vpn_start_failed", self.mayRetryExtension,
            self.vpnStatus == .disconnected || self.vpnStatus == .invalid,
            detail.domain == NEVPNConnectionErrorDomain,

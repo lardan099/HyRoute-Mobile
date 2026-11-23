@@ -182,7 +182,7 @@ public class MainActivity extends FlutterActivity {
                     });
                     break;
                 case "vpnJournal":
-                    result.success(Mobile.vpnJournal(journalPath(), ""));
+                    result.success(Mobile.vpnJournalEvents(journalPath(), ""));
                     break;
                 case "probeStart":
                     if (probeBatch != null) probeBatch.cancel();

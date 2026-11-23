@@ -57,6 +57,19 @@ abstract interface class DiagnosticsControl {
   Future<void> cancelProbe();
 }
 
+List<String> formatVpnJournal(String raw) {
+  String twoDigits(int value) => value.toString().padLeft(2, '0');
+
+  return (jsonDecode(raw) as List<dynamic>).map((entry) {
+    final event = entry as Map<String, dynamic>;
+    final local = DateTime.fromMillisecondsSinceEpoch(event['at'] as int);
+    final day = '${twoDigits(local.day)}.${twoDigits(local.month)}';
+    final clock =
+        '${twoDigits(local.hour)}:${twoDigits(local.minute)}:${twoDigits(local.second)}';
+    return '$day $clock  ${event['message']}';
+  }).toList();
+}
+
 class ProbeSnapshot {
   const ProbeSnapshot(this.done, this.results);
 
@@ -119,7 +132,7 @@ class PlatformCore
   @override
   Future<List<String>> vpnJournal() async {
     final raw = await _channel.invokeMethod<String>('vpnJournal');
-    return (jsonDecode(raw ?? '[]') as List<dynamic>).cast<String>();
+    return formatVpnJournal(raw ?? '[]');
   }
 
   @override

@@ -165,8 +165,8 @@ void HyRouteRecordVPNError(NSString *path, NSString *event, NSString *source, in
     MobileRecordVPNError(path, event, source, code);
 }
 
-NSString *HyRouteVPNJournal(NSString *appPath, NSString *tunnelPath) {
-    return MobileVPNJournal(appPath, tunnelPath) ?: @"[]";
+NSString *HyRouteVPNJournalEvents(NSString *appPath, NSString *tunnelPath) {
+    return MobileVPNJournalEvents(appPath, tunnelPath) ?: @"[]";
 }
 
 NSObject * _Nullable HyRouteStartProbe(NSString *state, NSString *scope, NSString *profileID, NSString *journal) {

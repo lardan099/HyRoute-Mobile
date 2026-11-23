@@ -113,8 +113,8 @@ func VPNGeodataKinds(raw string) string {
 			continue
 		}
 		for _, domain := range rule.AllDomains() {
-			prefix, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(domain)), ":")
-			if _, err := geoKind(prefix); err == nil && !slices.Contains(kinds, prefix) {
+			prefix, _, typed := strings.Cut(strings.ToLower(strings.TrimSpace(domain)), ":")
+			if _, err := geoKind(prefix); typed && err == nil && !slices.Contains(kinds, prefix) {
 				kinds = append(kinds, prefix)
 			}
 		}

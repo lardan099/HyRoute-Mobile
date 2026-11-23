@@ -55,7 +55,7 @@ enum TunnelStartError: Int, CustomNSError {
     case .noProfile: return "Выберите доступный профиль VPN на главном экране."
     case .rules: return "Не удалось применить локальные правила. Откройте «Правила» и проверьте условия."
     case .geodata: return "Расширение не нашло базу или категорию GeoSite/GeoIP. Обновите базы в настройках правил."
-    case .geodataSharedStorage: return "VPN-расширению недоступно общее хранилище GeoSite/GeoIP. При установке IPA приложению и расширению нужен один App Group."
+    case .geodataSharedStorage: return "Расширению недоступны геобазы для автозапуска. Отключите автовосстановление в «Защите VPN» и подключитесь вручную."
     case .missingReference: return "Правило или цепочка использует недоступный профиль. Откройте «Правила» и замените его или удалите связь."
     case .unsupportedProfile: return "Профиль содержит неподдерживаемые параметры соединения."
     case .preparation: return "Не удалось подготовить VPN. Проверьте доступность сервера и настройки профиля."

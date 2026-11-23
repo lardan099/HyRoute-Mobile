@@ -32,7 +32,7 @@ NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd);
 void HyRouteStopVPN(NSObject *session);
 void HyRouteRecordVPNEvent(NSString *path, NSString *event);
 void HyRouteRecordVPNError(NSString *path, NSString *event, NSString *source, int32_t code);
-NSString *HyRouteVPNJournal(NSString *appPath, NSString *tunnelPath);
+NSString *HyRouteVPNJournalEvents(NSString *appPath, NSString *tunnelPath);
 NSObject * _Nullable HyRouteStartProbe(NSString *state, NSString *scope, NSString *profileID, NSString *journal);
 NSString * _Nullable HyRouteProbeSnapshot(NSObject *probe);
 void HyRouteCancelProbe(NSObject *probe);

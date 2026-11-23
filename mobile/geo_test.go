@@ -23,6 +23,10 @@ func TestVPNGeodataKinds(t *testing.T) {
 	if got := VPNGeodataKinds(onlyDisabled); got != "" {
 		t.Fatalf("disabled rule requested geodata: %q", got)
 	}
+	bareLabel := `{"settings":{"routing":{"rules":[{"domains":["geoip"],"action":"direct"}]}}}`
+	if got := VPNGeodataKinds(bareLabel); got != "" {
+		t.Fatalf("plain domain label requested geodata: %q", got)
+	}
 }
 
 func TestCustomGeoFilesAreValidatedAndPinned(t *testing.T) {

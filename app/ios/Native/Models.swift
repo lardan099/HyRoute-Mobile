@@ -1,5 +1,21 @@
 import Foundation
 
+struct VPNJournalEvent: Decodable {
+  let at: Int64
+  let message: String
+
+  static func lines(_ data: Data, timeZone: TimeZone = .autoupdatingCurrent) throws -> [String] {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = timeZone
+    formatter.dateFormat = "dd.MM HH:mm:ss"
+    return try JSONDecoder().decode([Self].self, from: data).map { event in
+      let date = Date(timeIntervalSince1970: Double(event.at) / 1000)
+      return formatter.string(from: date) + "  " + event.message
+    }
+  }
+}
+
 enum RouteAction: String, Codable, CaseIterable, Identifiable {
   case tunnel, direct, block
 

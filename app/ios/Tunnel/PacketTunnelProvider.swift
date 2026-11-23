@@ -19,25 +19,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     worker.async {
       self.generation += 1
       let generation = self.generation
-      let usePrivateGeodata = options?["privateGeodata"] as? Bool == true
-      let source = usePrivateGeodata ? self.geodataReceiver?.directory : VPNStorage.sharedGeodata
+      let manualState = options?["state"] as? String
+      let source = manualState == nil ? VPNStorage.sharedGeodata : self.geodataReceiver?.directory
       let geodata = source ?? FileManager.default.temporaryDirectory
         .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
       let journal = VPNStorage.tunnelJournal
       HyRouteRecordVPNEvent(journal, "vpn_provider_start")
       let recoveryEnabled = (self.protocolConfiguration as? NETunnelProviderProtocol)?
         .providerConfiguration?["recovery"] as? Bool == true
-      let snapshot = options?["state"] as? String ?? (recoveryEnabled ? VPNStorage.recoveryState() : nil)
+      let snapshot = manualState ?? (recoveryEnabled ? VPNStorage.recoveryState() : nil)
       guard let state = snapshot, !state.isEmpty else {
         HyRouteRecordVPNEvent(journal, TunnelStartError.missingOptions.journalEvent)
         completionHandler(TunnelStartError.missingOptions)
         return
       }
-      if options?["state"] == nil { HyRouteRecordVPNEvent(journal, "vpn_system_restart") }
+      if manualState == nil { HyRouteRecordVPNEvent(journal, "vpn_system_restart") }
       var issue: NSString?
       guard let plan = HyRoutePlanVPN(state, geodata.path, &issue) else {
         let failure = TunnelStartError.planFailure(issue as String?,
-          sharedGeodataAvailable: usePrivateGeodata || (source != nil && FileManager.default.isReadableFile(atPath: geodata.path)))
+          sharedGeodataAvailable: manualState != nil || (source != nil && FileManager.default.isReadableFile(atPath: geodata.path)))
         HyRouteRecordVPNEvent(journal, failure.journalEvent)
         completionHandler(failure)
         return
@@ -97,7 +97,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   override func handleAppMessage(_ data: Data, completionHandler: ((Data?) -> Void)?) {
     worker.async {
       if data.count <= 64 * 1024, let transfer = try? PropertyListDecoder().decode(GeodataTransfer.self, from: data) {
-        let reply = self.session == nil ? self.geodataReceiver?.receive(transfer) : nil
+        let reply: GeodataTransfer.Reply?
+        if transfer.action == .checkRecovery {
+          reply = Self.recoveryStorageAvailable() ? .ready : nil
+        } else {
+          reply = self.session == nil ? self.geodataReceiver?.receive(transfer) : nil
+        }
         completionHandler?(reply?.data)
         return
       }
@@ -131,6 +136,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       let snapshot = self.probe.flatMap { HyRouteProbeSnapshot($0) }
       completionHandler?(snapshot.map { Data($0.utf8) })
     }
+  }
+
+  private static func recoveryStorageAvailable() -> Bool {
+    guard let state = VPNStorage.recoveryState(), !state.isEmpty else { return false }
+    if HyRouteVPNGeodataKinds(state).isEmpty { return true }
+    guard let directory = VPNStorage.sharedGeodata else { return false }
+    return FileManager.default.isReadableFile(atPath: directory.path)
   }
 
   private static func networkSettings() -> NEPacketTunnelNetworkSettings {
