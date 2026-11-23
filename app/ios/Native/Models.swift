@@ -45,6 +45,46 @@ func ruleDestinations(_ input: String) -> [String] {
   }
 }
 
+enum RuleDomainCondition: CaseIterable, Hashable {
+  case suffix, contains
+
+  var label: String { self == .suffix ? "Домен заканчивается на" : "В домене есть" }
+  var example: String { self == .suffix ? ".ru" : "video" }
+  var exampleMatch: String { self == .suffix ? "Например, .ru подходит для mail.yandex.ru." : "Например, video подходит для cdn-video.example.org." }
+
+  func value(from pattern: String) -> String? {
+    switch self {
+    case .suffix: return pattern.hasPrefix(".") && pattern.count > 1 ? pattern : nil
+    case .contains:
+      let prefix = "keyword:"
+      guard pattern.lowercased().hasPrefix(prefix), pattern.count > prefix.count else { return nil }
+      return String(pattern.dropFirst(prefix.count))
+    }
+  }
+
+  func patterns(_ input: String) -> [String]? {
+    var output: [String] = []
+    let invalid = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "/:*?#"))
+    for item in ruleDestinations(input) {
+      var text = value(from: item) ?? item
+      if self == .suffix {
+        if text.hasPrefix("*.") { text.removeFirst(2) }
+        if text.hasPrefix(".") { text.removeFirst() }
+      }
+      guard !text.isEmpty, text.rangeOfCharacter(from: invalid) == nil,
+            self != .suffix || (!text.hasPrefix(".") && !text.contains("..")) else { return nil }
+      output.append((self == .suffix ? "." : "keyword:") + text)
+    }
+    return output
+  }
+
+  static func summary(_ pattern: String) -> String {
+    if let suffix = Self.suffix.value(from: pattern) { return "Окончание \(suffix)" }
+    if let word = Self.contains.value(from: pattern) { return "Содержит «\(word)»" }
+    return pattern
+  }
+}
+
 struct VPNProfile: Decodable, Identifiable {
   let id: String
   let name: String
@@ -125,7 +165,7 @@ struct RouteRule: Codable {
   }
 
   var title: String {
-    var parts = domains ?? []
+    var parts = (domains ?? []).map(RuleDomainCondition.summary)
     if let ports, !ports.isEmpty { parts.append("Порт \(ports)") }
     if let `protocol`, !`protocol`.isEmpty { parts.append(`protocol`.uppercased()) }
     return parts.isEmpty ? "Любое назначение" : parts.joined(separator: " · ")

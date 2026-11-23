@@ -521,6 +521,60 @@ List<String> ruleDestinations(String input) => input
     .toSet()
     .toList();
 
+enum RuleDomainCondition {
+  suffix(
+    'Домен заканчивается на',
+    '.ru',
+    'Например, .ru подходит для mail.yandex.ru.',
+  ),
+  contains(
+    'В домене есть',
+    'video',
+    'Например, video подходит для cdn-video.example.org.',
+  );
+
+  const RuleDomainCondition(this.label, this.example, this.exampleMatch);
+  final String label;
+  final String example;
+  final String exampleMatch;
+
+  String? valueFrom(String pattern) {
+    return switch (this) {
+      suffix when pattern.startsWith('.') && pattern.length > 1 => pattern,
+      contains
+          when pattern.toLowerCase().startsWith('keyword:') &&
+              pattern.length > 8 =>
+        pattern.substring(8),
+      _ => null,
+    };
+  }
+
+  List<String>? patterns(String input) {
+    final result = <String>[];
+    final invalid = RegExp(r'[\s/:*?#]');
+    for (final item in ruleDestinations(input)) {
+      var text = valueFrom(item) ?? item;
+      if (this == suffix && text.startsWith('*.')) text = text.substring(2);
+      if (this == suffix && text.startsWith('.')) text = text.substring(1);
+      if (text.isEmpty ||
+          invalid.hasMatch(text) ||
+          (this == suffix && (text.startsWith('.') || text.contains('..')))) {
+        return null;
+      }
+      result.add('${this == suffix ? '.' : 'keyword:'}$text');
+    }
+    return result;
+  }
+
+  static String summary(String pattern) {
+    if (suffix.valueFrom(pattern) case final value?) return 'Окончание $value';
+    if (contains.valueFrom(pattern) case final value?) {
+      return 'Содержит «$value»';
+    }
+    return pattern;
+  }
+}
+
 class RouteRule {
   const RouteRule({
     required this.action,
@@ -554,7 +608,8 @@ class RouteRule {
   final String protocol;
 
   String get title => [
-    if (destination.isNotEmpty) destination.replaceAll('\n', ', '),
+    if (destination.isNotEmpty)
+      destination.split('\n').map(RuleDomainCondition.summary).join(', '),
     if (package.isNotEmpty) appName.isEmpty ? package : appName,
     if (port.isNotEmpty) 'Порт $port',
     if (protocol.isNotEmpty) protocol.toUpperCase(),

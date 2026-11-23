@@ -435,26 +435,27 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   Future<void> _editRule([int? index, String? destination]) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => RuleEditor(
-        servers: _servers,
-        android: widget.core.supportsAndroidRules,
-        pickGeoTag: _pickGeoTag,
-        pickProfile: (id) => _pickProfile(id, useMain: true),
-        pickApp: widget.core.supportsAndroidRules ? _pickApp : null,
-        save: (rule) {
-          final next = [..._rules];
-          if (index == null) {
-            next.add(rule);
-          } else {
-            next[index] = rule;
-          }
-          return _saveSettings(rules: next, inline: true);
-        },
-        destination: destination,
-        initial: index == null ? null : _rules[index],
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => RuleEditor(
+          servers: _servers,
+          android: widget.core.supportsAndroidRules,
+          pickGeoTag: _pickGeoTag,
+          pickProfile: (id) => _pickProfile(id, useMain: true),
+          pickApp: widget.core.supportsAndroidRules ? _pickApp : null,
+          save: (rule) {
+            final next = [..._rules];
+            if (index == null) {
+              next.add(rule);
+            } else {
+              next[index] = rule;
+            }
+            return _saveSettings(rules: next, inline: true);
+          },
+          destination: destination,
+          initial: index == null ? null : _rules[index],
+        ),
       ),
     );
   }

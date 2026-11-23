@@ -41,5 +41,11 @@ struct StateCompatibility {
     precondition(blank.settings.routing.defaultAction == .tunnel)
     precondition(blank.selected == nil)
     precondition(ruleDestinations("https://example.org/path?token=test\nexample.org\ngeoip:ru\n::1") == ["example.org", "geoip:ru", "::1"])
+    precondition(RuleDomainCondition.suffix.patterns("ru\n.co.uk") == [".ru", ".co.uk"])
+    precondition(RuleDomainCondition.contains.patterns("pzdcflix\nkeyword:example") == ["keyword:pzdcflix", "keyword:example"])
+    precondition(RuleDomainCondition.suffix.patterns(".ru не сайт") == nil)
+    precondition(RuleDomainCondition.suffix.value(from: ".ru") == ".ru")
+    precondition(RuleDomainCondition.contains.value(from: "keyword:pzdcflix") == "pzdcflix")
+    precondition(RuleDomainCondition.summary("regexp:^demo") == "regexp:^demo")
   }
 }

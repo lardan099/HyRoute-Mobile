@@ -225,6 +225,8 @@ private struct RuleEditor: View {
   let draft: RuleDraft
   @Environment(\.dismiss) private var dismiss
   @State private var destination: String
+  @State private var conditions: [RuleDomainCondition: String]
+  @State private var expandedConditions: Set<RuleDomainCondition>
   @State private var ports: String
   @State private var network: String
   @State private var action: RouteAction
@@ -237,7 +239,15 @@ private struct RuleEditor: View {
   init(client: Client, draft: RuleDraft) {
     self.client = client
     self.draft = draft
-    _destination = State(initialValue: draft.rule.domains?.joined(separator: "\n") ?? "")
+    let stored = draft.rule.domains ?? []
+    let values = Dictionary(uniqueKeysWithValues: RuleDomainCondition.allCases.map { kind in
+      (kind, stored.compactMap { kind.value(from: $0) }.joined(separator: "\n"))
+    })
+    _conditions = State(initialValue: values)
+    _expandedConditions = State(initialValue: Set(values.keys.filter { values[$0]?.isEmpty == false }))
+    _destination = State(initialValue: stored.filter { item in
+      !RuleDomainCondition.allCases.contains { $0.value(from: item) != nil }
+    }.joined(separator: "\n"))
     _ports = State(initialValue: draft.rule.ports ?? "")
     _network = State(initialValue: draft.rule.protocol ?? "")
     _action = State(initialValue: draft.rule.action)
@@ -268,6 +278,9 @@ private struct RuleEditor: View {
             ViewThatFits(in: .horizontal) {
               HStack { pasteDestination; geoButton }
               VStack(alignment: .leading) { pasteDestination; geoButton }
+            }
+            ForEach(RuleDomainCondition.allCases, id: \.self) { kind in
+              conditionEditor(kind)
             }
           }
           .hyCard()
@@ -364,16 +377,49 @@ private struct RuleEditor: View {
       .buttonStyle(.bordered)
   }
 
+  private func conditionEditor(_ kind: RuleDomainCondition) -> some View {
+    let expanded = Binding(get: { expandedConditions.contains(kind) }, set: { show in
+      if show { expandedConditions.insert(kind) } else { expandedConditions.remove(kind) }
+    })
+    let input = Binding(get: { conditions[kind, default: ""] }, set: {
+      conditions[kind] = $0
+      error = nil
+    })
+    return DisclosureGroup(kind.label, isExpanded: expanded) {
+      VStack(alignment: .leading, spacing: 6) {
+        TextField(kind.label, text: input, prompt: Text(kind.example), axis: .vertical)
+          .accessibilityLabel(kind.label)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .lineLimit(1...4)
+          .padding(10)
+          .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
+        Text(kind.exampleMatch).font(.footnote).foregroundStyle(HyStyle.muted)
+      }
+      .padding(.top, 6)
+    }
+    .frame(minHeight: 44)
+  }
+
   private func save() async {
     var routing = client.state.settings.routing
+    var destinations = domains
+    for kind in RuleDomainCondition.allCases {
+      guard let patterns = kind.patterns(conditions[kind, default: ""]) else {
+        error = "Проверьте условие «\(kind.label)». Пример \(kind.example)."
+        return
+      }
+      destinations.append(contentsOf: patterns)
+    }
+    let savedDomains = ruleDestinations(destinations.joined(separator: "\n"))
     let port = ports.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !domains.isEmpty || !port.isEmpty || !network.isEmpty else {
-      error = "Введите сайт или выберите готовый список."
+    guard !savedDomains.isEmpty || !port.isEmpty || !network.isEmpty else {
+      error = "Укажите сайт, IP или условие для домена."
       return
     }
     error = nil
     let next = RouteRule(
-      action: action, domains: domains.isEmpty ? nil : domains,
+      action: action, domains: savedDomains.isEmpty ? nil : savedDomains,
       ports: port.isEmpty ? nil : port, protocol: network.isEmpty ? nil : network,
       profile: action == .tunnel && !profile.isEmpty ? profile : nil,
       enabled: draft.rule.enabled

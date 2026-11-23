@@ -212,6 +212,41 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('adds and edits plain domain suffix and keyword conditions', (
+    tester,
+  ) async {
+    final core = await _openApp(tester);
+    await _tap(tester, 'Правила');
+    await _tap(tester, 'Добавить правило');
+    await _tap(tester, 'Домен заканчивается на');
+    final suffix = find.byKey(const ValueKey(RuleDomainCondition.suffix));
+    await tester.enterText(suffix, 'ru');
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('В домене есть'));
+    await _tap(tester, 'В домене есть');
+    final keyword = find.byKey(const ValueKey(RuleDomainCondition.contains));
+    await tester.enterText(keyword, 'pzdcflix');
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    final direct = find.text('Напрямую');
+    await tester.ensureVisible(direct);
+    await _tap(tester, 'Напрямую');
+    await _tap(tester, 'Сохранить');
+    expect(jsonDecode(core.configuration!)['rules'].single, {
+      'action': 'direct',
+      'domains': ['.ru', 'keyword:pzdcflix'],
+    });
+    await _tap(tester, 'Окончание .ru, Содержит «pzdcflix»');
+    expect(tester.widget<TextField>(suffix).controller!.text, '.ru');
+    expect(tester.widget<TextField>(keyword).controller!.text, 'pzdcflix');
+    await _tap(tester, 'Сохранить');
+    expect(jsonDecode(core.configuration!)['rules'].single['domains'], [
+      '.ru',
+      'keyword:pzdcflix',
+    ]);
+  });
+
   testWidgets('saves and reopens the split DNS settings', (tester) async {
     final core = _DiagnosticsTestCore();
     await _openApp(tester, core: core);
@@ -481,7 +516,7 @@ void main() {
       await _tap(tester, 'Добавить правило');
       await tester.enterText(find.byType(TextField).first, '.example.org');
       await _tap(tester, 'Сохранить');
-      expect(find.text('.example.org'), findsOneWidget);
+      expect(find.text('Окончание .example.org'), findsOneWidget);
       expect(jsonDecode(core.configuration!), {
         'defaultAction': 'tunnel',
         'rules': [
