@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct RulesPage: View {
   @ObservedObject var client: Client
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var editing: RuleDraft?
   @State private var editingChain: Bool
   @State private var pane: Pane
@@ -23,7 +24,7 @@ struct RulesPage: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      controls
+      sectionPicker
       if pane == .rules { ruleList }
       else { settings }
     }
@@ -50,42 +51,53 @@ struct RulesPage: View {
     .sheet(isPresented: $editingChain) { ChainEditor(client: client) }
   }
 
-  private var controls: some View {
+  private var sectionPicker: some View {
+    Picker("Раздел правил", selection: $pane) {
+      ForEach(Pane.allCases, id: \.self) { item in Text(item.rawValue).tag(item) }
+    }
+    .pickerStyle(.segmented)
+    .accessibilityIdentifier("rules-sections")
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+  }
+
+  private var ruleTools: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Picker("Раздел правил", selection: $pane) {
-        ForEach(Pane.allCases, id: \.self) { item in Text(item.rawValue).tag(item) }
-      }
-      .pickerStyle(.segmented)
-      .accessibilityIdentifier("rules-sections")
       ViewThatFits(in: .horizontal) {
-        HStack { ruleSetLink; routeCheckLink }
+        HStack { ruleSetLink.fixedSize(); routeCheckLink.fixedSize() }
         VStack(alignment: .leading) { ruleSetLink; routeCheckLink }
       }
       if !brokenRules.isEmpty || !brokenChains.isEmpty {
-        HStack(spacing: 8) {
-          Label("Недоступных ссылок: \(brokenRules.count + brokenChains.count)", systemImage: "exclamationmark.circle")
-            .font(.subheadline.weight(.semibold)).foregroundStyle(HyStyle.failure)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          Menu("Исправить") {
-            ForEach(brokenRules, id: \.self) { index in
-              Button(routing.rules[index].title) { editRule(index) }
-            }
-            if !brokenChains.isEmpty {
-              Button("Цепочки профилей") { editingChain = true }
-            }
-          }
-          .font(.subheadline.weight(.semibold))
-          .accessibilityIdentifier("rules-repair")
-          .frame(minHeight: 44)
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 10) { repairLabel.fixedSize(); Spacer(minLength: 0); repairMenu.fixedSize() }
+          VStack(alignment: .leading, spacing: 0) { repairLabel; repairMenu }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 12)
+        .padding(.horizontal, 12)
         .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 10))
       }
     }
-    .padding(.horizontal, 16)
     .padding(.vertical, 8)
-    .background(HyStyle.canvas)
+  }
+
+  private var repairLabel: some View {
+    Label("Недоступные профили · \(brokenRules.count + brokenChains.count)", systemImage: "exclamationmark.circle")
+      .font(.subheadline.weight(.semibold)).foregroundStyle(HyStyle.failure)
+      .fixedSize(horizontal: false, vertical: true)
+      .padding(.vertical, 4)
+  }
+
+  private var repairMenu: some View {
+    Menu("Исправить") {
+      ForEach(brokenRules, id: \.self) { index in
+        Button(routing.rules[index].title) { editRule(index) }
+      }
+      if !brokenChains.isEmpty {
+        Button("Цепочки профилей") { editingChain = true }
+      }
+    }
+    .font(.subheadline.weight(.semibold))
+    .accessibilityIdentifier("rules-repair")
+    .frame(minHeight: 44)
   }
 
   private var ruleSetLink: some View {
@@ -93,7 +105,7 @@ struct RulesPage: View {
       RoutingProfilesPage(client: client)
     } label: {
       Label(client.state.activeRuleSet?.name ?? "Профили правил", systemImage: "square.stack")
-        .lineLimit(1)
+        .lineLimit(2)
     }
     .buttonStyle(.bordered)
     .accessibilityIdentifier("rule-sets")
@@ -111,6 +123,10 @@ struct RulesPage: View {
 
   private var ruleList: some View {
     List {
+      ruleTools
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowBackground(HyStyle.canvas)
+        .listRowSeparator(.hidden)
       if routing.rules.isEmpty {
         Button { editing = RuleDraft(rule: RouteRule()) } label: {
           HyRow(title: "Добавить первое правило", symbol: "plus", disclosure: false)
@@ -125,10 +141,12 @@ struct RulesPage: View {
           HStack(spacing: 10) {
             HyIcon(symbol: unavailable ? "exclamationmark.triangle" : rule.action.symbol, size: 32)
             VStack(alignment: .leading, spacing: 3) {
-              Text(rule.title).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink).lineLimit(2)
+              Text(rule.title).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink)
+                .lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+                .fixedSize(horizontal: false, vertical: true)
               Text(rule.profile.map(client.state.profileTitle) ?? rule.action.label)
                 .font(.subheadline).foregroundStyle(unavailable ? HyStyle.failure : HyStyle.muted)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right")
@@ -154,6 +172,7 @@ struct RulesPage: View {
   private var settings: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 10) {
+        ruleTools
         Menu {
           ForEach(RouteAction.allCases) { action in
             Button { mutate { $0.defaultAction = action } } label: {
@@ -267,6 +286,7 @@ private struct RuleEditor: View {
             HyHeading(text: "Что направить")
             TextField("Сайт, ссылка или IP", text: $destination, axis: .vertical)
               .lineLimit(2...5)
+              .accessibilityIdentifier("rule-destination")
               .textInputAutocapitalization(.never).autocorrectionDisabled()
               .onChange(of: destination) { _ in error = nil }
               .padding(12)
@@ -303,6 +323,7 @@ private struct RuleEditor: View {
               }
               .buttonStyle(.plain)
               .accessibilityAddTraits(action == option ? .isSelected : [])
+              .accessibilityIdentifier("rule-action-\(option.rawValue)")
             }
             if action == .tunnel {
               Divider()
@@ -331,18 +352,26 @@ private struct RuleEditor: View {
             .padding(.top, 10)
           }
           .hyCard()
-          if let error { Text(error).foregroundStyle(HyStyle.failure) }
         }
         .padding(16)
       }
       .scrollDismissesKeyboard(.interactively)
       .hyScreen()
       .safeAreaInset(edge: .bottom, spacing: 0) {
-        Button("Сохранить правило") { Task { await save() } }
-          .buttonStyle(HyButton())
-          .disabled(client.busy)
-          .padding(16)
-          .background(HyStyle.canvas.ignoresSafeArea(edges: .bottom))
+        VStack(alignment: .leading, spacing: 8) {
+          if let error {
+            Text(error).font(.subheadline).foregroundStyle(HyStyle.failure)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("rule-error")
+          }
+          Button("Сохранить правило") { Task { await save() } }
+            .buttonStyle(HyButton())
+            .disabled(client.busy)
+            .accessibilityIdentifier("rule-save")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(HyStyle.canvas)
       }
       .navigationTitle(draft.index == nil ? "Новое правило" : "Правило")
       .navigationBarTitleDisplayMode(.inline)
@@ -399,6 +428,7 @@ private struct RuleEditor: View {
       .padding(.top, 6)
     }
     .frame(minHeight: 44)
+    .accessibilityIdentifier("rule-condition-\(kind)")
   }
 
   private func save() async {
@@ -440,150 +470,212 @@ private struct RuleEditor: View {
   }
 }
 
+private struct ChainDraft: Hashable {
+  let exit: String
+  let entry: String
+
+  var isNew: Bool { exit.isEmpty }
+}
+
 private struct ChainEditor: View {
   @ObservedObject var client: Client
   @Environment(\.dismiss) private var dismiss
-  @State private var exit = ""
-  @State private var entry = ""
-  @State private var saveError: String?
   @State private var removing: String?
+  @State private var error: String?
 
-  private var profiles: [VPNProfile] { client.state.chainProfiles }
-  private var entrances: [VPNProfile] { client.state.profiles }
-  private var exits: Set<String> { Set(profiles.map(\.id)) }
-  private var available: Set<String> { Set(entrances.map(\.id)) }
   private var routing: Routing { client.state.settings.routing }
-  private var unavailable: [String] { routing.unavailableChainExits(available: available) }
-  private var savedExits: [String] {
-    routing.viaProfiles.keys.filter { !unavailable.contains($0) }
-      .sorted { client.state.profileTitle($0).localizedStandardCompare(client.state.profileTitle($1)) == .orderedAscending }
+  private var unavailable: Set<String> {
+    Set(routing.unavailableChainExits(available: Set(client.state.profiles.map(\.id))))
+  }
+  private var drafts: [ChainDraft] {
+    routing.viaProfiles.map { ChainDraft(exit: $0.key, entry: $0.value) }
+      .sorted { client.state.profileTitle($0.exit).localizedStandardCompare(client.state.profileTitle($1.exit)) == .orderedAscending }
   }
 
   var body: some View {
+    let broken = unavailable
+    let all = drafts
+    let invalid = all.filter { broken.contains($0.exit) }
+    let saved = all.filter { !broken.contains($0.exit) }
+    let hasFreeExit = client.state.chainProfiles.contains { routing.viaProfiles[$0.id] == nil }
     NavigationStack {
-      Form {
-        if !savedExits.isEmpty {
-          Section("Сохранённые связи") {
-            ForEach(savedExits, id: \.self) { saved in
-              if let first = routing.viaProfiles[saved] {
-                Button { selectExit(saved) } label: {
-                  HyRow(title: client.state.profileTitle(saved), symbol: "link",
-                        detail: "Через \(client.state.profileTitle(first))")
-                }
-                .accessibilityIdentifier("saved-chain-\(saved)")
-                .swipeActions(allowsFullSwipe: false) {
-                  Button("Удалить", role: .destructive) { removing = saved }
-                }
-              }
-            }
+      List {
+        Section {
+          NavigationLink(value: ChainDraft(exit: "", entry: "")) {
+            Label("Новая цепочка", systemImage: "plus")
+              .font(.body.weight(.semibold))
+              .frame(minHeight: 44)
           }
+          .accessibilityIdentifier("new-chain")
+          .disabled(!hasFreeExit || client.state.profiles.count < 2)
+          .listRowBackground(HyStyle.surface)
+        } footer: {
+          if client.state.profiles.count < 2 { Text("Для цепочки нужны два VPN-профиля.") }
+          else if !hasFreeExit { Text("У каждого выходного профиля уже есть цепочка.") }
         }
-        if !unavailable.isEmpty {
-          Section("Недоступные связи") {
-            ForEach(unavailable, id: \.self) { brokenExit in
-              if let brokenEntry = routing.viaProfiles[brokenExit] {
-                VStack(alignment: .leading, spacing: 10) {
-                  chainEndpoint("Выход", value: client.state.profileTitle(brokenExit), valid: available.contains(brokenExit))
-                  chainEndpoint("Через", value: client.state.profileTitle(brokenEntry), valid: available.contains(brokenEntry))
-                  if exits.contains(brokenExit), entrances.count >= 2 {
-                    Menu("Заменить промежуточный профиль") {
-                      ForEach(entrances.filter { $0.id != brokenExit }) { profile in
-                        Button(profile.title) {
-                          exit = brokenExit
-                          entry = profile.id
-                          saveError = nil
-                        }
-                      }
-                    }
-                    .buttonStyle(.borderless)
-                    .frame(minHeight: 44, alignment: .leading)
-                    .accessibilityIdentifier("replace-broken-chain-\(brokenExit)")
-                  }
-                  Button("Удалить связь", role: .destructive) {
-                    Task { await removeLink(brokenExit) }
-                  }
-                  .buttonStyle(.borderless)
-                  .frame(minHeight: 44, alignment: .leading)
-                  .accessibilityIdentifier("remove-broken-chain-\(brokenExit)")
-                }
-                .padding(.vertical, 4)
-                .listRowBackground(HyStyle.surface)
-              }
-            }
-          }
-        }
-        if !profiles.isEmpty {
-          Section("Настроить связь") {
-            Picker("Выходной профиль", selection: Binding(get: { exit }, set: selectExit)) {
-              Text("Выбрать").tag("")
-              ForEach(profiles) { Text($0.title).tag($0.id) }
-            }
-            Picker("Через профиль", selection: $entry) {
-              Text("Без промежуточного профиля").tag("")
-              if !entry.isEmpty && !available.contains(entry) {
-                Text(client.state.profileTitle(entry)).tag(entry)
-              }
-              ForEach(entrances.filter { $0.id != exit }) { Text($0.title).tag($0.id) }
-            }
-            .disabled(exit.isEmpty)
-            .onChange(of: entry) { _ in saveError = nil }
-          }
-        }
-        if routing.viaProfiles[exit] != nil && savedExits.contains(exit) {
-          Button("Удалить связь", role: .destructive) { removing = exit }
-            .accessibilityIdentifier("remove-saved-chain")
-        }
-        if let saveError {
-          Text(saveError).foregroundStyle(HyStyle.failure)
+        if let error {
+          Text(error).foregroundStyle(HyStyle.failure)
             .accessibilityIdentifier("chain-save-error")
         }
+        if !saved.isEmpty {
+          Section("Сохранённые связи") {
+            ForEach(saved, id: \.exit) { draft in
+              NavigationLink(value: draft) {
+                HyRow(title: client.state.profileTitle(draft.exit), symbol: "link",
+                      detail: "Через \(client.state.profileTitle(draft.entry))", disclosure: false)
+              }
+              .accessibilityIdentifier("saved-chain-\(draft.exit)")
+              .swipeActions(allowsFullSwipe: false) {
+                Button("Удалить", role: .destructive) { removing = draft.exit }
+              }
+              .listRowBackground(HyStyle.surface)
+            }
+          }
+        }
+        if !invalid.isEmpty {
+          Section("Недоступные связи") {
+            ForEach(invalid, id: \.exit) { draft in
+              VStack(alignment: .leading, spacing: 4) {
+                Text(client.state.profileTitle(draft.exit)).font(.headline)
+                Text("Через \(client.state.profileTitle(draft.entry))")
+                  .font(.subheadline).foregroundStyle(HyStyle.failure)
+                if client.state.chainProfiles.contains(where: { $0.id == draft.exit }) {
+                  NavigationLink("Заменить промежуточный профиль", value: draft)
+                    .frame(minHeight: 44, alignment: .leading)
+                    .accessibilityIdentifier("replace-broken-chain-\(draft.exit)")
+                }
+                Button("Удалить связь", role: .destructive) { removing = draft.exit }
+                  .buttonStyle(.borderless)
+                  .frame(minHeight: 44, alignment: .leading)
+                  .accessibilityIdentifier("remove-broken-chain-\(draft.exit)")
+              }
+              .padding(.vertical, 5)
+              .listRowBackground(HyStyle.surface)
+            }
+          }
+        }
       }
-      .disabled(client.busy)
       .hyList()
       .navigationTitle("Цепочки")
       .navigationBarTitleDisplayMode(.inline)
+      .navigationDestination(for: ChainDraft.self) { ChainForm(client: client, draft: $0) }
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() }.disabled(client.busy) }
+      }
       .confirmationDialog("Удалить связь?", isPresented: Binding(
         get: { removing != nil }, set: { if !$0 { removing = nil } }
       ), titleVisibility: .visible, presenting: removing) { id in
         Button("Удалить", role: .destructive) { Task { await removeLink(id) } }
       }
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Сохранить") {
-            Task {
-              do {
-                try await client.saveChain(exit: exit, entry: entry.isEmpty ? nil : entry)
-                dismiss()
-              } catch { saveError = error.localizedDescription }
-            }
-          }
-          .disabled(!exits.contains(exit) || (!entry.isEmpty && !available.contains(entry)) || client.busy ||
-                    entry == (routing.viaProfiles[exit] ?? ""))
-        }
-      }
+      .disabled(client.busy)
     }
-  }
-
-  private func selectExit(_ id: String) {
-    exit = id
-    entry = routing.viaProfiles[id] ?? ""
-    saveError = nil
   }
 
   private func removeLink(_ id: String) async {
-    saveError = nil
-    do {
-      try await client.saveChain(exit: id, entry: nil)
-      if exit == id { entry = "" }
-    } catch { saveError = error.localizedDescription }
+    error = nil
+    do { try await client.saveChain(exit: id, entry: nil) }
+    catch { self.error = error.localizedDescription }
+  }
+}
+
+private struct ChainForm: View {
+  @ObservedObject var client: Client
+  let draft: ChainDraft
+  @Environment(\.dismiss) private var dismiss
+  @State private var exit: String
+  @State private var entry: String
+  @State private var picker: Endpoint?
+  @State private var confirmingDelete = false
+  @State private var error: String?
+
+  private enum Endpoint: String, Identifiable {
+    case entry, exit
+
+    var id: Self { self }
+    var title: String { self == .entry ? "Первый профиль или группа" : "Выходной профиль" }
   }
 
-  private func chainEndpoint(_ title: String, value: String, valid: Bool) -> some View {
-    VStack(alignment: .leading, spacing: 3) {
-      Text(title).font(.caption.weight(.medium)).foregroundStyle(HyStyle.muted)
-      Text(value).font(.body.weight(.semibold)).foregroundStyle(valid ? HyStyle.ink : HyStyle.failure)
+  init(client: Client, draft: ChainDraft) {
+    self.client = client
+    self.draft = draft
+    _exit = State(initialValue: draft.exit)
+    _entry = State(initialValue: draft.entry)
+  }
+
+  private var canSave: Bool {
+    !client.busy && entry != exit && !entry.isEmpty && !exit.isEmpty &&
+      client.state.profiles.contains { $0.id == entry } &&
+      client.state.chainProfiles.contains { $0.id == exit } &&
+      (draft.isNew || entry != draft.entry)
+  }
+
+  var body: some View {
+    List {
+      Section {
+        endpointRow(.entry, value: entry)
+        if draft.isNew {
+          endpointRow(.exit, value: exit)
+        } else {
+          HyRow(title: "2. Выходной профиль", symbol: "arrow.up.right",
+                detail: client.state.profileTitle(exit), disclosure: false)
+        }
+      } footer: {
+        Text("Трафик сначала идёт через первый профиль, затем через выходной.")
+      }
+      .listRowBackground(HyStyle.surface)
+      if let error {
+        Text(error).foregroundStyle(HyStyle.failure)
+          .accessibilityIdentifier("chain-save-error")
+          .listRowBackground(HyStyle.surface)
+      }
+      if !draft.isNew {
+        Button("Удалить связь", role: .destructive) { confirmingDelete = true }
+          .accessibilityIdentifier("remove-saved-chain")
+          .listRowBackground(HyStyle.surface)
+      }
     }
+    .hyList()
+    .navigationTitle(draft.isNew ? "Новая цепочка" : "Изменить цепочку")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .confirmationAction) {
+        Button("Сохранить") { Task { await save(entry: entry) } }
+          .disabled(!canSave)
+          .accessibilityIdentifier("chain-save")
+      }
+    }
+    .sheet(item: $picker) { endpoint in
+      let candidates = endpoint == .entry
+        ? client.state.profiles.filter { $0.id != exit }
+        : client.state.chainProfiles.filter { $0.id != entry && client.state.settings.routing.viaProfiles[$0.id] == nil }
+      ProfilePicker(client: client, selected: endpoint == .entry ? entry : exit, select: { id in
+        if endpoint == .entry { entry = id } else { exit = id }
+        error = nil
+      }, candidates: candidates, pickerTitle: endpoint.title, offerMainProfile: false)
+    }
+    .confirmationDialog("Удалить связь?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+      Button("Удалить", role: .destructive) { Task { await save(entry: nil) } }
+    }
+    .disabled(client.busy)
+  }
+
+  private func endpointRow(_ endpoint: Endpoint, value: String) -> some View {
+    Button { picker = endpoint } label: {
+      HyRow(title: "\(endpoint == .entry ? 1 : 2). \(endpoint.title)",
+            symbol: endpoint == .entry ? "arrow.right" : "arrow.up.right",
+            detail: value.isEmpty ? "Выбрать" : client.state.profileTitle(value))
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("chain-\(endpoint.rawValue)")
+    .accessibilityValue(value.isEmpty ? "Не выбран" : client.state.profileTitle(value))
+  }
+
+  private func save(entry: String?) async {
+    error = nil
+    do {
+      try await client.saveChain(exit: exit, entry: entry)
+      dismiss()
+    } catch { self.error = error.localizedDescription }
   }
 }
 

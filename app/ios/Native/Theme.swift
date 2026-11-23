@@ -2,17 +2,16 @@ import SwiftUI
 import UIKit
 
 enum HyStyle {
-  static let canvas = adaptive(light: 0xF3F6F2, dark: 0x101816)
-  static let surface = adaptive(light: 0xFFFFFF, dark: 0x18221E)
-  static let inset = adaptive(light: 0xE6EEE8, dark: 0x25362F)
-  static let stroke = adaptive(light: 0xD1DED5, dark: 0x364B40)
-  static let ink = adaptive(light: 0x172821, dark: 0xF1F7F3)
-  static let muted = adaptive(light: 0x52665A, dark: 0xACC2B5)
+  static let canvas = adaptive(light: 0xF4F5F6, dark: 0x121417)
+  static let surface = adaptive(light: 0xFFFFFF, dark: 0x1D2024)
+  static let inset = adaptive(light: 0xEAEDF0, dark: 0x292E34)
+  static let stroke = adaptive(light: 0xD8DDE3, dark: 0x373E46)
+  static let ink = adaptive(light: 0x171C24, dark: 0xF1F4F6)
+  static let muted = adaptive(light: 0x536171, dark: 0xACB9C5)
   static let accent = adaptive(light: 0x12664F, dark: 0x9BEAC5)
   static let fill = adaptive(light: 0x14674F, dark: 0xA2EDC9)
   static let onFill = adaptive(light: 0xFFFFFF, dark: 0x102A20)
   static let success = adaptive(light: 0x116747, dark: 0x90E6BE)
-  static let connectionSurface = adaptive(light: 0xE6F2E8, dark: 0x213B2F)
   static let failure = adaptive(light: 0xA12D38, dark: 0xFFA3AA)
 
   private static func adaptive(light: UInt32, dark: UInt32) -> Color {

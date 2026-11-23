@@ -7,8 +7,9 @@ struct Dashboard: View {
   @State private var importing = false
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 26) {
+    let selectedID = client.state.selected?.id
+    return ScrollView {
+      VStack(alignment: .leading, spacing: 18) {
         connectionCard
         if !client.state.subscriptions.isEmpty {
           LazyVStack(alignment: .leading, spacing: 10) {
@@ -17,7 +18,7 @@ struct Dashboard: View {
               .accessibilityAddTraits(.isHeader)
               .padding(.bottom, 3)
             ForEach(client.state.subscriptions) { item in
-              DashboardSubscription(client: client, item: item)
+              DashboardSubscription(client: client, item: item, selectedID: selectedID)
             }
           }
         }
@@ -25,7 +26,7 @@ struct Dashboard: View {
       .frame(maxWidth: 640)
       .frame(maxWidth: .infinity)
       .padding(.horizontal, 18)
-      .padding(.vertical, 16)
+      .padding(.vertical, 12)
     }
     .hyScreen()
     .navigationTitle("HyRoute")
@@ -67,27 +68,45 @@ struct Dashboard: View {
 
   private var connectionCard: some View {
     let active = client.vpnStatus.isActiveTunnel
-    return VStack(alignment: .leading, spacing: 18) {
-      HStack(spacing: 10) {
-        Text(status).font(.title.bold()).foregroundStyle(HyStyle.ink)
-          .accessibilityIdentifier("dashboard-vpn-status")
-        Spacer(minLength: 0)
-        if pending {
-          ProgressView().tint(HyStyle.accent)
-        } else {
-          Image(systemName: active ? "lock.shield.fill" : "lock.open")
-            .font(.title2.weight(.medium))
-            .foregroundStyle(active ? HyStyle.success : HyStyle.muted)
-            .padding(10)
-            .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 12))
+    return VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 8) {
+        if pending { ProgressView().tint(HyStyle.accent).accessibilityHidden(true) }
+        else {
+          Circle().fill(active ? HyStyle.success : HyStyle.muted).frame(width: 8, height: 8)
             .accessibilityHidden(true)
         }
+        Text(status).font(.subheadline.weight(.semibold))
+          .foregroundStyle(active ? HyStyle.success : HyStyle.muted)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("dashboard-vpn-status")
+      }
+      if let profile = client.state.selected {
+        Button { choosingProfile = true } label: {
+          HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+              Text(profile.displayTitle).font(.title2.weight(.semibold))
+                .foregroundStyle(HyStyle.ink)
+                .fixedSize(horizontal: false, vertical: true)
+              Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "arrow.up.arrow.down").font(.subheadline.weight(.semibold))
+              .foregroundStyle(HyStyle.accent).accessibilityHidden(true)
+          }
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Основной профиль")
+        .accessibilityValue(profile.displayTitle)
+        .accessibilityIdentifier("profilePicker")
       }
       if client.state.selected == nil && !active {
         Button { importing = true } label: {
           Label("Добавить подписку", systemImage: "plus")
         }
         .buttonStyle(HyButton())
+        .accessibilityIdentifier("dashboard-add-first-subscription")
       } else {
         Button { Task { await client.toggleVPN() } } label: {
           Label(active ? "Отключить VPN" : "Подключить VPN", systemImage: "power")
@@ -96,43 +115,10 @@ struct Dashboard: View {
         .disabled(client.vpnBusy || client.vpnStatus == .disconnecting)
         .accessibilityIdentifier("dashboard-vpn-button")
       }
-      if let profile = client.state.selected {
-        Divider()
-        Button { choosingProfile = true } label: {
-          HStack(spacing: 10) {
-            Image(systemName: profile.balance == true ? "bolt.fill" : "globe.europe.africa")
-              .foregroundStyle(HyStyle.accent)
-              .frame(width: 34, height: 34)
-              .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 9))
-              .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Основной профиль").font(.caption).foregroundStyle(HyStyle.muted)
-              Text(profile.displayTitle).font(.subheadline.weight(.semibold))
-                .foregroundStyle(HyStyle.ink).lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold))
-              .foregroundStyle(HyStyle.muted).accessibilityHidden(true)
-          }
-          .frame(maxWidth: .infinity, minHeight: 47, alignment: .leading)
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Основной профиль")
-        .accessibilityValue(profile.displayTitle)
-        .accessibilityIdentifier("profilePicker")
-      }
     }
-    .padding(20)
+    .padding(16)
     .background {
-      RoundedRectangle(cornerRadius: 26)
-        .fill(LinearGradient(colors: [HyStyle.connectionSurface, HyStyle.surface],
-                             startPoint: .topLeading, endPoint: .bottomTrailing))
-    }
-    .overlay {
-      RoundedRectangle(cornerRadius: 26)
-        .strokeBorder(HyStyle.stroke, lineWidth: 1)
-        .allowsHitTesting(false)
+      RoundedRectangle(cornerRadius: 18).fill(HyStyle.surface)
     }
   }
 }
@@ -140,20 +126,23 @@ struct Dashboard: View {
 private struct DashboardSubscription: View {
   @ObservedObject var client: Client
   let item: Subscription
-  @State private var expanded = false
+  let selectedID: String?
+  @State private var expansion: Bool?
 
   var body: some View {
     let available = item.servers.filter { $0.missing != true }
-    LazyVStack(alignment: .leading, spacing: 0) {
+    let expanded = expansion ?? available.contains { $0.id == selectedID }
+    return LazyVStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 8) {
-        Button { expanded.toggle() } label: {
+        Button { expansion = !expanded } label: {
           HStack(spacing: 10) {
             Image(systemName: expanded ? "chevron.down" : "chevron.right")
               .font(.caption.weight(.semibold)).frame(width: 15)
               .foregroundStyle(HyStyle.muted).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-              Text(item.name).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink).lineLimit(2)
-              Text("Серверов: \(available.count)").font(.caption).foregroundStyle(HyStyle.muted)
+              Text(item.name).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink)
+                .fixedSize(horizontal: false, vertical: true)
+              Text("Доступно \(available.count)").font(.caption).foregroundStyle(HyStyle.muted)
             }
             Spacer(minLength: 0)
           }
@@ -200,11 +189,11 @@ private struct DashboardSubscription: View {
             HStack(spacing: 10) {
               VStack(alignment: .leading, spacing: 3) {
                 Text(profile.displayTitle).font(.subheadline.weight(.semibold))
-                  .foregroundStyle(HyStyle.ink).lineLimit(2)
+                  .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)
                 Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
               }
               Spacer(minLength: 0)
-              if client.state.selected?.id == profile.id {
+              if selectedID == profile.id {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
                   .accessibilityHidden(true)
               }
@@ -213,7 +202,7 @@ private struct DashboardSubscription: View {
           }
           .buttonStyle(.plain)
           .disabled(client.busy)
-          .accessibilityAddTraits(client.state.selected?.id == profile.id ? .isSelected : [])
+          .accessibilityAddTraits(selectedID == profile.id ? .isSelected : [])
           .accessibilityIdentifier("dashboard-profile-\(profile.id)")
           .padding(.horizontal, 15)
           if profile.id != available.last?.id {

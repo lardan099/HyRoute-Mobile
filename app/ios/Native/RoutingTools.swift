@@ -404,8 +404,6 @@ struct SubscriptionDetails: View {
         }
         if let updated = date(item.refreshedAt) {
           Text("Обновлена \(updated.formatted(date: .abbreviated, time: .shortened))")
-        } else {
-          Text("Нет даты обновления")
         }
       }
     }

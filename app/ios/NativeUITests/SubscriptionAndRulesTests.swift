@@ -52,10 +52,12 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.navigationBars["Цепочки"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["Недоступные связи"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["remove-broken-chain-auto"].isHittable)
-    let save = app.buttons["Сохранить"]
-    XCTAssertFalse(save.isEnabled)
     tap(app.buttons["replace-broken-chain-auto"])
-    tap(app.buttons["🇫🇮 Хельсинки · Северный узел | Hysteria 2"].firstMatch)
+    XCTAssertTrue(app.navigationBars["Изменить цепочку"].waitForExistence(timeout: 10))
+    let save = app.buttons["chain-save"]
+    XCTAssertFalse(save.isEnabled)
+    tap(app.buttons["chain-entry"])
+    tap(app.buttons["picker-profile-fi"])
     let canSave = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
     XCTAssertEqual(XCTWaiter.wait(for: [canSave], timeout: 10), .completed)
   }
@@ -90,6 +92,8 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.buttons["dashboard-vpn-button"].isHittable)
 
     let server = app.buttons["dashboard-profile-demo-entry"]
+    XCTAssertTrue(server.isHittable)
+    tap(app.buttons["dashboard-subscription-demo"])
     XCTAssertFalse(server.exists)
     tap(app.buttons["dashboard-subscription-demo"])
     tap(server)
@@ -108,15 +112,16 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(app.buttons["rules-chains"])
     let saved = app.buttons["saved-chain-demo-node"]
     tap(saved)
+    XCTAssertTrue(app.navigationBars["Изменить цепочку"].waitForExistence(timeout: 10))
     tap(app.buttons["remove-saved-chain"])
     tap(app.buttons["Удалить"])
     let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: saved)
     XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 10), .completed)
-    tap(app.buttons["Отмена"])
+    tap(app.buttons["Закрыть"])
     tap(app.buttons["rules-chains"])
     XCTAssertTrue(app.navigationBars["Цепочки"].waitForExistence(timeout: 10))
     XCTAssertFalse(saved.exists)
-    tap(app.buttons["Отмена"])
+    tap(app.buttons["Закрыть"])
     tap(app.buttons["tab-home"])
     tap(app.buttons["profilePicker"])
     XCTAssertTrue(app.buttons["picker-profile-demo-node"].waitForExistence(timeout: 10))
@@ -192,5 +197,148 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(original)
     let selection = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: original)
     XCTAssertEqual(XCTWaiter.wait(for: [selection], timeout: 10), .completed)
+  }
+
+  func testOpensSubscriptionFromHomeAndReturnsToOpenList() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["dashboard-server-details-demo"])
+    let details = app.navigationBars["Тестовая подписка"]
+    XCTAssertTrue(details.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["subscription-check-all"].isHittable)
+    tap(details.buttons.firstMatch)
+    XCTAssertTrue(app.buttons["dashboard-profile-demo-entry"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["dashboard-profile-demo-entry"].isHittable)
+  }
+
+  func testInvalidImportKeepsInputAndShowsErrorNextToSubmit() {
+    let app = launch()
+    tap(app.buttons["dashboard-import"])
+    let submit = app.buttons["import-submit"]
+    XCTAssertFalse(submit.isEnabled)
+    let input = app.textViews["import-input"]
+    tap(input)
+    input.typeText("invalid-subscription")
+    tap(submit)
+    let error = app.staticTexts["import-error"]
+    XCTAssertTrue(error.waitForExistence(timeout: 10))
+    XCTAssertTrue(error.isHittable)
+    XCTAssertEqual(input.value as? String, "invalid-subscription")
+    tap(app.buttons["Отмена"])
+    XCTAssertTrue(app.buttons["dashboard-import"].waitForExistence(timeout: 10))
+  }
+
+  func testRuleValidationAndDomainSuffixRouting() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-rules"])
+    tap(app.buttons["rules-add"])
+    let save = app.buttons["rule-save"]
+    tap(save)
+    let error = app.staticTexts["rule-error"]
+    XCTAssertTrue(error.waitForExistence(timeout: 10))
+    XCTAssertTrue(error.isHittable)
+    let destination = app.descendants(matching: .any)["rule-destination"].firstMatch
+    tap(destination)
+    destination.typeText(".ru")
+    XCTAssertFalse(error.exists)
+    let direct = app.buttons["rule-action-direct"]
+    for _ in 0..<4 where !direct.isHittable { app.scrollViews.firstMatch.swipeUp() }
+    tap(direct)
+    tap(save)
+    tap(app.buttons["route-check"])
+    let address = app.textFields["route-check-address"]
+    tap(address)
+    address.typeText("mail.example.ru")
+    tap(app.buttons["route-check-submit"])
+    let result = app.descendants(matching: .any)["route-check-action"].firstMatch
+    XCTAssertTrue(result.waitForExistence(timeout: 10))
+    XCTAssertEqual(result.label, "Напрямую")
+  }
+
+  func testNewChainRejectsACycleAndKeepsDraft() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-rules"])
+    tap(app.segmentedControls.buttons["Настройки"].firstMatch)
+    tap(app.buttons["rules-chains"])
+    tap(app.buttons["new-chain"])
+    let save = app.buttons["chain-save"]
+    XCTAssertFalse(save.isEnabled)
+    tap(app.buttons["chain-entry"])
+    tap(app.buttons["picker-profile-demo-node"])
+    tap(app.buttons["chain-exit"])
+    XCTAssertFalse(app.buttons["picker-profile-demo-node"].exists)
+    tap(app.buttons["picker-profile-demo-entry"])
+    tap(save)
+    let error = app.staticTexts["chain-save-error"]
+    XCTAssertTrue(error.waitForExistence(timeout: 10))
+    XCTAssertTrue(error.label.contains("Цепочка замыкается"))
+    XCTAssertTrue(app.navigationBars["Новая цепочка"].exists)
+  }
+
+  func testNewChainCanUseAnEntireServerGroup() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-subscriptions"])
+    tap(app.buttons["manage-server-groups"])
+    tap(app.buttons["create-server-group"])
+    let name = app.textFields["server-group-name"]
+    tap(name)
+    name.typeText("Work")
+    let primary = app.descendants(matching: .any)["group-server-demo-entry"].firstMatch
+    XCTAssertTrue(primary.waitForExistence(timeout: 10))
+    primary.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+    tap(app.buttons["server-group-save"])
+
+    tap(app.buttons["tab-rules"])
+    tap(app.segmentedControls.buttons["Настройки"].firstMatch)
+    tap(app.buttons["rules-chains"])
+    tap(app.buttons["new-chain"])
+    tap(app.buttons["chain-entry"])
+    let group = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+      "picker-profile-", "Work")).firstMatch
+    tap(group)
+    tap(app.buttons["chain-exit"])
+    tap(app.buttons["picker-profile-demo-third"])
+    tap(app.buttons["chain-save"])
+    let saved = app.buttons["saved-chain-demo-third"]
+    XCTAssertTrue(saved.waitForExistence(timeout: 10))
+    XCTAssertTrue(saved.label.contains("Work"))
+  }
+}
+
+final class CompactLayoutTests: XCTestCase {
+  private func launch() -> XCUIApplication {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchEnvironment["HYROUTE_LAYOUT_PREVIEW"] = "home"
+    app.launchEnvironment["HYROUTE_UI_TEST"] = "1"
+    app.launch()
+    return app
+  }
+
+  func testLargeTextHomeAndSubscriptionControlsRemainReachable() {
+    let app = launch()
+    let status = app.staticTexts["dashboard-vpn-status"]
+    XCTAssertTrue(status.waitForExistence(timeout: 10))
+    XCTAssertGreaterThan(status.frame.height, 24, "Expected accessibility content size")
+    XCTAssertTrue(app.buttons["dashboard-vpn-button"].isHittable)
+    let details = app.buttons["dashboard-server-details-preview"]
+    for _ in 0..<5 where !details.isHittable { app.scrollViews.firstMatch.swipeUp() }
+    XCTAssertTrue(details.isHittable)
+    details.tap()
+    XCTAssertTrue(app.buttons["subscription-check-all"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["subscription-check-all"].isHittable)
+    XCTAssertLessThanOrEqual(app.buttons["subscription-check-all"].frame.maxX, app.frame.maxX)
+  }
+
+  func testLargeTextRulesCanScrollPastRepairControls() {
+    let app = launch()
+    let tab = app.buttons["tab-rules"]
+    XCTAssertTrue(tab.waitForExistence(timeout: 10))
+    tab.tap()
+    let lastRule = app.buttons["rule-row-7"]
+    for _ in 0..<10 where !lastRule.isHittable { app.swipeUp() }
+    XCTAssertTrue(lastRule.isHittable)
+    lastRule.tap()
+    XCTAssertTrue(app.buttons["rule-save"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["rule-save"].isHittable)
   }
 }

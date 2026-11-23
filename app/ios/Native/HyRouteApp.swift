@@ -66,6 +66,7 @@ private struct RootView: View {
   @ObservedObject var client: Client
   @Environment(\.scenePhase) private var scenePhase
   @State private var tab: Tab = .home
+  @State private var keyboardVisible = false
 
   private var previewScreen: String? {
     #if targetEnvironment(simulator)
@@ -110,18 +111,20 @@ private struct RootView: View {
           panel(.rules) { RulesPage(client: client, preview: previewScreen) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-          VStack(spacing: 0) {
-            if client.canApplyVPNChanges || client.restartingVPN {
-              ViewThatFits(in: .horizontal) {
-                HStack { Text("Настройки изменились"); Spacer(); reconnectButton }
-                VStack(alignment: .leading, spacing: 8) { Text("Настройки изменились"); reconnectButton }
+          if !keyboardVisible {
+            VStack(spacing: 0) {
+              if client.canApplyVPNChanges || client.restartingVPN {
+                ViewThatFits(in: .horizontal) {
+                  HStack { Text("Настройки изменились"); Spacer(); reconnectButton }
+                  VStack(alignment: .leading, spacing: 8) { Text("Настройки изменились"); reconnectButton }
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(HyStyle.canvas)
               }
-              .font(.subheadline)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(.horizontal, 16).padding(.vertical, 8)
-              .background(HyStyle.canvas)
+              tabBar
             }
-            tabBar
           }
         }
       } else if client.busy {
@@ -150,6 +153,12 @@ private struct RootView: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)) { _ in
       client.syncVPNStatus()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+      keyboardVisible = true
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+      keyboardVisible = false
     }
     .task(id: client.ready && scenePhase == .active) {
       guard client.ready, scenePhase == .active, previewScreen == nil else { return }
@@ -194,7 +203,9 @@ private struct RootView: View {
             Image(systemName: item.icon).font(.system(size: 18, weight: .semibold))
               .accessibilityHidden(true)
             Text(item.title).font(.caption.weight(tab == item ? .bold : .medium))
-              .lineLimit(1)
+              .multilineTextAlignment(.center)
+              .lineLimit(2)
+              .minimumScaleFactor(0.8)
           }
           .frame(maxWidth: .infinity, minHeight: 48)
           .foregroundStyle(tab == item ? HyStyle.accent : HyStyle.muted)
@@ -239,15 +250,18 @@ struct VPNRecoveryPage: View {
 struct ProfileRow: View {
   let profile: VPNProfile
   var selected = false
+  @Environment(\.dynamicTypeSize) private var typeSize
 
   var body: some View {
     HStack(spacing: 12) {
       HyIcon(symbol: profile.balance == true ? "bolt.fill" : "server.rack")
       VStack(alignment: .leading, spacing: 3) {
         Text(profile.displayTitle).font(.body.weight(.semibold))
-          .foregroundStyle(HyStyle.ink).lineLimit(2)
+          .foregroundStyle(HyStyle.ink).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+          .fixedSize(horizontal: false, vertical: true)
         Text(profile.missing == true ? "Сервер недоступен" : profile.transport)
-          .font(.subheadline).foregroundStyle(HyStyle.muted).lineLimit(1)
+          .font(.subheadline).foregroundStyle(HyStyle.muted)
+          .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .layoutPriority(1)
@@ -264,18 +278,21 @@ struct ProfilePicker: View {
   @ObservedObject var client: Client
   var selected: String?
   var select: ((String) -> Void)?
+  var candidates: [VPNProfile]?
+  var pickerTitle: String?
+  var offerMainProfile = true
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
 
   var body: some View {
     NavigationStack {
       List {
-        if let select {
+        if let select, offerMainProfile {
           Button { select(""); dismiss() } label: {
             Label("Основной профиль", systemImage: "star")
           }
         }
-        ForEach(client.state.profiles.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.host?.localizedCaseInsensitiveContains(query) == true }) { profile in
+        ForEach((candidates ?? client.state.profiles).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.host?.localizedCaseInsensitiveContains(query) == true }) { profile in
           Button {
             if let select {
               select(profile.id)
@@ -293,7 +310,7 @@ struct ProfilePicker: View {
       }
       .hyList()
       .searchable(text: $query, prompt: "Найти профиль")
-      .navigationTitle(select == nil ? "Основной профиль" : "Профиль правила")
+      .navigationTitle(pickerTitle ?? (select == nil ? "Основной профиль" : "Профиль правила"))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
     }
@@ -401,7 +418,8 @@ struct SubscriptionPage: View {
             Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
               .accessibilityIdentifier("subscription-probe-error")
           }
-          if item.canRefresh == true || item.usedBytes != nil || item.limitBytes != nil || item.expiresAt != nil {
+          if item.refreshFailed == true || (item.refreshedAt ?? 0) > 0 ||
+              item.usedBytes != nil || item.limitBytes != nil || (item.expiresAt ?? 0) > 0 {
             SubscriptionDetails(item: item)
           }
           LazyVStack(spacing: 0) {
@@ -546,13 +564,24 @@ struct ImportSheet: View {
               .padding(8)
               .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
               .accessibilityLabel("Ссылка или конфиг подписки")
+              .accessibilityIdentifier("import-input")
+              .onChange(of: input) { _ in error = nil }
             PasteButton(payloadType: String.self) { values in
               if let first = values.first { input = first; error = nil }
             }
             .accessibilityLabel("Вставить подписку")
           }
           .hyCard()
-          if let error { Text(error).foregroundStyle(HyStyle.failure) }
+        }
+        .padding(16)
+      }
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
+          if let error {
+            Text(error).font(.subheadline).foregroundStyle(HyStyle.failure)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("import-error")
+          }
           Button {
             Task {
               error = nil
@@ -566,13 +595,17 @@ struct ImportSheet: View {
               }
             }
           } label: {
-            if client.busy { ProgressView().tint(HyStyle.onFill) }
-            else { Label("Импортировать", systemImage: "arrow.down") }
+            if client.busy {
+              HStack { ProgressView().tint(HyStyle.onFill); Text("Импортируем…") }
+            } else { Label("Импортировать", systemImage: "arrow.down") }
           }
           .buttonStyle(HyButton())
           .disabled(client.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          .accessibilityIdentifier("import-submit")
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(HyStyle.canvas)
       }
       .hyScreen()
       .scrollDismissesKeyboard(.interactively)

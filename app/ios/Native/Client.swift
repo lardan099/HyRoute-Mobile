@@ -26,7 +26,8 @@ actor NativeCore {
       "snapshot":{"title":"Тестовая подписка","userInfo":"upload=1073741824; download=2147483648; total=10737418240; expire=1893456000",
       "servers":[
         {"id":"demo-node","name":"Тестовый сервер","host":"192.0.2.2","ports":"443","auth":"fixture"},
-        {"id":"demo-entry","name":"Запасной сервер","host":"192.0.2.3","ports":"443","auth":"fixture"}]}}],
+        {"id":"demo-entry","name":"Запасной сервер","host":"192.0.2.3","ports":"443","auth":"fixture"},
+        {"id":"demo-third","name":"Третий сервер","host":"192.0.2.4","ports":"443","auth":"fixture"}]}}],
       "settings":{"selected":"demo-node","routing":{"defaultAction":"tunnel","rules":[
         {"name":"Сайт без VPN","domains":["example.org"],"action":"direct"},
         {"name":"YouTube через запасной","domains":["domain:youtube.com"],"action":"tunnel","profile":"demo-entry"}
