@@ -62,11 +62,9 @@ struct RulesPage: View {
   }
 
   private var ruleTools: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      ViewThatFits(in: .horizontal) {
-        HStack { ruleSetLink.fixedSize(); routeCheckLink.fixedSize() }
-        VStack(alignment: .leading) { ruleSetLink; routeCheckLink }
-      }
+    Group {
+      ruleSetLink
+      routeCheckLink
       if !brokenRules.isEmpty || !brokenChains.isEmpty {
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 10) { repairLabel.fixedSize(); Spacer(minLength: 0); repairMenu.fixedSize() }
@@ -76,7 +74,6 @@ struct RulesPage: View {
         .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 10))
       }
     }
-    .padding(.vertical, 8)
   }
 
   private var repairLabel: some View {
@@ -104,10 +101,9 @@ struct RulesPage: View {
     NavigationLink {
       RoutingProfilesPage(client: client)
     } label: {
-      Label(client.state.activeRuleSet?.name ?? "Профили правил", systemImage: "square.stack")
-        .lineLimit(2)
+      HyRow(title: "Профили правил", symbol: "square.stack",
+            detail: client.state.activeRuleSet?.name, disclosure: false)
     }
-    .buttonStyle(.bordered)
     .accessibilityIdentifier("rule-sets")
   }
 
@@ -115,18 +111,16 @@ struct RulesPage: View {
     NavigationLink {
       RouteCheckPage(client: client)
     } label: {
-      Label("Проверить адрес", systemImage: "magnifyingglass")
+      HyRow(title: "Проверить адрес", symbol: "magnifyingglass", disclosure: false)
     }
-    .buttonStyle(.bordered)
     .accessibilityIdentifier("route-check")
   }
 
   private var ruleList: some View {
     List {
       ruleTools
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         .listRowBackground(HyStyle.canvas)
-        .listRowSeparator(.hidden)
       if routing.rules.isEmpty {
         Button { editing = RuleDraft(rule: RouteRule()) } label: {
           HyRow(title: "Добавить первое правило", symbol: "plus", disclosure: false)
@@ -173,8 +167,7 @@ struct RulesPage: View {
     List {
       Section {
         ruleTools
-          .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-          .listRowBackground(HyStyle.canvas)
+          .listRowBackground(HyStyle.surface)
       }
       Section("Маршрутизация") {
         Menu {

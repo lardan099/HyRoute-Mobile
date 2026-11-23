@@ -46,6 +46,7 @@ private struct ServerGroupEditor: View {
   @State private var error: String?
   @State private var confirmingDelete = false
   @State private var query = ""
+  @FocusState private var nameFocused: Bool
 
   init(client: Client, servers: [VPNProfile], group: ServerGroup? = nil) {
     self.client = client
@@ -59,6 +60,9 @@ private struct ServerGroupEditor: View {
   var body: some View {
     Form {
       TextField("Название группы", text: $name)
+        .focused($nameFocused)
+        .submitLabel(.done)
+        .onSubmit { nameFocused = false }
         .accessibilityIdentifier("server-group-name")
       Section {
         ForEach(servers.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }) { server in
@@ -84,6 +88,7 @@ private struct ServerGroupEditor: View {
     }
     .hyList()
     .searchable(text: $query, prompt: "Найти основной сервер")
+    .scrollDismissesKeyboard(.interactively)
     .disabled(client.busy)
     .navigationTitle(id.isEmpty ? "Новая группа" : "Настройки группы")
     .navigationBarTitleDisplayMode(.inline)

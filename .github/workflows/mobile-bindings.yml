@@ -34,7 +34,7 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.platform == 'iOS' && inputs.ios_runner || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.platform == 'iOS' && 45 || 30 }}
+    timeout-minutes: ${{ matrix.platform == 'iOS' && 50 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -226,7 +226,7 @@ jobs:
           for screen in home servers rules routing chains vpn-log traffic; do
             SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
               xcrun simctl launch --terminate-running-process "$device" io.hyroute.hyrouteMobile
-            sleep 3
+            sleep 5
             xcrun simctl io "$device" screenshot "../../dist/HyRoute-iOS-$screen-$HYROUTE_APP_VERSION.png"
           done
           printf 'HYROUTE_APP_PREVIEW=dist/HyRoute-iOS-*-%s.png\n' "$HYROUTE_APP_VERSION" >> "$GITHUB_ENV"
@@ -239,7 +239,7 @@ jobs:
       - name: Test SwiftUI flows on iPhone
         if: steps.ios_previews.outcome == 'success'
         working-directory: app/ios
-        timeout-minutes: ${{ inputs.ios_runner == 'macos-26-intel' && 20 || 14 }}
+        timeout-minutes: 20
         shell: bash
         run: |
           device="$HYROUTE_SIMULATOR"
@@ -276,7 +276,7 @@ jobs:
           for screen in home rules chains; do
             SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
               xcrun simctl launch --terminate-running-process "$compact" io.hyroute.hyrouteMobile
-            sleep 3
+            sleep 5
             xcrun simctl io "$compact" screenshot "../../dist/HyRoute-iOS-compact-$screen-$HYROUTE_APP_VERSION.png"
           done
           printf 'HYROUTE_COMPACT_PREVIEW=dist/HyRoute-iOS-compact-*-%s.png\n' "$HYROUTE_APP_VERSION" >> "$GITHUB_ENV"

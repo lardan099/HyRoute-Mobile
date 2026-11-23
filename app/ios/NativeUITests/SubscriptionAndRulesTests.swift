@@ -189,7 +189,7 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(app.buttons["create-server-group"])
     let name = app.textFields["server-group-name"]
     tap(name)
-    name.typeText("Work")
+    name.typeText("Work\n")
     let primary = app.descendants(matching: .any)["group-server-demo-node"].firstMatch
     XCTAssertTrue(primary.waitForExistence(timeout: 10), "Primary server is missing")
     primary.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
@@ -238,6 +238,8 @@ final class SubscriptionAndRulesTests: XCTestCase {
     let app = launch(screen: "routes-test")
     tap(app.buttons["tab-rules"])
     tap(app.buttons["rule-sets"])
+    XCTAssertTrue(app.navigationBars["Профили правил"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["route-check-submit"].isHittable)
     tap(app.buttons["routing-profile-copy"])
     let name = app.textFields["routing-profile-name"]
     tap(name)
@@ -340,11 +342,15 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(app.buttons["create-server-group"])
     let name = app.textFields["server-group-name"]
     tap(name)
-    name.typeText("Work")
+    name.typeText("Work\n")
     let primary = app.descendants(matching: .any)["group-server-demo-entry"].firstMatch
     XCTAssertTrue(primary.waitForExistence(timeout: 10))
     primary.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
-    tap(app.buttons["server-group-save"])
+    let saveGroup = app.buttons["server-group-save"]
+    let canSave = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: saveGroup)
+    XCTAssertEqual(XCTWaiter.wait(for: [canSave], timeout: 10), .completed)
+    tap(saveGroup)
+    XCTAssertTrue(app.navigationBars["Группы серверов"].waitForExistence(timeout: 10))
 
     tap(app.buttons["tab-rules"])
     tap(app.segmentedControls.buttons["Настройки"].firstMatch)
