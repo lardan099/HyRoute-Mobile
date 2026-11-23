@@ -170,9 +170,13 @@ struct RulesPage: View {
   }
 
   private var settings: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 10) {
+    List {
+      Section {
         ruleTools
+          .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+          .listRowBackground(HyStyle.canvas)
+      }
+      Section("Маршрутизация") {
         Menu {
           ForEach(RouteAction.allCases) { action in
             Button { mutate { $0.defaultAction = action } } label: {
@@ -181,43 +185,38 @@ struct RulesPage: View {
           }
         } label: {
           HyRow(title: "Трафик без правила", symbol: routing.defaultAction.symbol, detail: routing.defaultAction.label)
-            .hyCard(padding: 12)
         }
         .buttonStyle(.plain)
 
         Button { editingChain = true } label: {
           HyRow(title: "Цепочки профилей", symbol: "link", detail: chainSummary)
-            .hyCard(padding: 12)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("rules-chains")
-        .disabled(client.state.chainProfiles.count < 2 && routing.viaProfiles.isEmpty)
-
-        NavigationLink {
-          GeoCatalog(client: client)
-        } label: {
-          HyRow(title: "Базы правил", symbol: "globe.europe.africa", detail: "GeoSite и GeoIP")
-            .hyCard(padding: 12)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("rules-geo")
-
         NavigationLink {
           SplitDNSPage(client: client)
         } label: {
           HyRow(title: "Раздельный DNS", symbol: "arrow.triangle.branch",
-                detail: client.state.settings.splitDNS == nil ? "Выключен" : "Включён")
-            .hyCard(padding: 12)
+                detail: client.state.settings.splitDNS == nil ? "Выключен" : "Включён", disclosure: false)
         }
-        .buttonStyle(.plain)
       }
-      .padding(16)
+      .listRowBackground(HyStyle.surface)
+      Section("Данные") {
+        NavigationLink {
+          GeoCatalog(client: client)
+        } label: {
+          HyRow(title: "Базы правил", symbol: "globe.europe.africa", detail: "GeoSite и GeoIP", disclosure: false)
+        }
+        .accessibilityIdentifier("rules-geo")
+      }
+      .listRowBackground(HyStyle.surface)
     }
+    .scrollContentBackground(.hidden)
   }
 
   private var chainSummary: String {
     if !brokenChains.isEmpty { return "Недоступных связей: \(brokenChains.count)" }
-    if routing.viaProfiles.isEmpty { return client.state.chainProfiles.count < 2 ? "Нужно два VPN-профиля" : "Цепочки не настроены" }
+    if routing.viaProfiles.isEmpty { return client.state.profiles.count < 2 ? "Нужно два VPN-профиля" : "Цепочки не настроены" }
     return "Связей: \(routing.viaProfiles.count)"
   }
 
@@ -258,7 +257,7 @@ private struct RuleEditor: View {
   init(client: Client, draft: RuleDraft) {
     self.client = client
     self.draft = draft
-    let stored = draft.rule.domains ?? []
+    let stored = draft.rule.destinations
     let values = Dictionary(uniqueKeysWithValues: RuleDomainCondition.allCases.map { kind in
       (kind, stored.compactMap { kind.value(from: $0) }.joined(separator: "\n"))
     })
@@ -283,7 +282,7 @@ private struct RuleEditor: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 14) {
           VStack(alignment: .leading, spacing: 10) {
-            HyHeading(text: "Что направить")
+            HyHeading(text: "1. Что направить")
             TextField("Сайт, ссылка или IP", text: $destination, axis: .vertical)
               .lineLimit(2...5)
               .accessibilityIdentifier("rule-destination")
@@ -306,7 +305,7 @@ private struct RuleEditor: View {
           .hyCard()
 
           VStack(alignment: .leading, spacing: 8) {
-            HyHeading(text: "Куда направить")
+            HyHeading(text: "2. Куда направить")
             ForEach(RouteAction.allCases) { option in
               Button { action = option } label: {
                 HStack(spacing: 10) {
@@ -448,12 +447,13 @@ private struct RuleEditor: View {
       return
     }
     error = nil
-    let next = RouteRule(
-      action: action, domains: savedDomains.isEmpty ? nil : savedDomains,
-      ports: port.isEmpty ? nil : port, protocol: network.isEmpty ? nil : network,
-      profile: action == .tunnel && !profile.isEmpty ? profile : nil,
-      enabled: draft.rule.enabled
-    )
+    var next = draft.rule
+    next.action = action
+    next.domains = savedDomains.isEmpty ? nil : savedDomains
+    next.domain = nil
+    next.ports = port.isEmpty ? nil : port
+    next.protocol = network.isEmpty ? nil : network
+    next.profile = action == .tunnel && !profile.isEmpty ? profile : nil
     if let index = draft.index {
       guard routing.rules.indices.contains(index) else { return }
       routing.rules[index] = next
@@ -685,6 +685,7 @@ private enum GeoDatabase: String, CaseIterable, Identifiable {
   var id: Self { self }
   var kind: String { self == .site ? "geosite" : "geoip" }
   var filename: String { kind + ".dat" }
+  var title: String { self == .site ? "Категории сайтов" : "Диапазоны IP" }
 }
 
 private struct GeoCatalog: View {
@@ -700,17 +701,19 @@ private struct GeoCatalog: View {
   @State private var editingSource: GeoDatabase?
 
   var body: some View {
-    List {
+    let matches = tags.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) || name($0).localizedCaseInsensitiveContains(query) }
+    return List {
       Section {
         Button { Task { await load(update: true) } } label: {
           if busy { ProgressView() }
           else { Label(tags.isEmpty ? "Скачать базы" : "Обновить базы", systemImage: "arrow.down.circle") }
         }
         .disabled(busy)
-        if let error { Text(error).foregroundStyle(.secondary) }
+        if let error { Text(error).foregroundStyle(HyStyle.failure) }
       } footer: {
         if select == nil { Text("Базы и подписки по ссылкам проверяются раз в сутки.") }
       }
+      .listRowBackground(HyStyle.surface)
       if select == nil {
         Section("Источники") {
           ForEach(GeoDatabase.allCases) { kind in
@@ -727,12 +730,22 @@ private struct GeoCatalog: View {
             .accessibilityIdentifier("geo-source-\(kind.rawValue)")
           }
         }
+        .listRowBackground(HyStyle.surface)
       }
-      ForEach(tags.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) || name($0).localizedCaseInsensitiveContains(query) }, id: \.self) { tag in
-        if let select {
-          Button { select(tag) } label: { row(tag) }
-        } else {
-          row(tag)
+      if matches.isEmpty && !busy && error == nil {
+        Text(query.isEmpty ? "Категорий пока нет. Скачайте или импортируйте базы." : "Категории не найдены.")
+          .foregroundStyle(HyStyle.muted)
+      }
+      ForEach(GeoDatabase.allCases) { database in
+        let categories = matches.filter { $0.hasPrefix(database.kind + ":") }
+        if !categories.isEmpty {
+          Section(database.title) {
+            ForEach(categories, id: \.self) { tag in
+              if let select { Button { select(tag) } label: { row(tag) } }
+              else { row(tag) }
+            }
+          }
+          .listRowBackground(HyStyle.surface)
         }
       }
     }

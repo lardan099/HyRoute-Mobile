@@ -42,6 +42,7 @@ final class ProbeHandle {
   private var localProbe: NSObject?
   #if targetEnvironment(simulator)
   var simulatorResult: ProbeSnapshot?
+  var simulatorDelay: Duration = .zero
   #endif
 
   init(snapshot: String, scope: String, id: String, journal: String, session: NETunnelProviderSession?) {
@@ -54,7 +55,10 @@ final class ProbeHandle {
 
   func start() async throws -> ProbeSnapshot {
     #if targetEnvironment(simulator)
-    if let simulatorResult { return simulatorResult }
+    if let simulatorResult {
+      if simulatorDelay > .zero { try await Task.sleep(for: simulatorDelay) }
+      return simulatorResult
+    }
     #endif
     if let session {
       let data = try await send(ProbeCommand(action: .start, token: token, scope: scope, id: id, state: snapshot), to: session)
@@ -105,42 +109,38 @@ extension NETunnelProviderSession {
 
 struct VPNJournalPage: View {
   @ObservedObject var client: Client
-  @State private var lines: [String] = []
+  @State private var events: [VPNJournalEvent] = []
   @State private var loading = true
   @State private var failed = false
 
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 0) {
-        if loading {
-          ProgressView("Читаем журнал").padding(12)
-        } else if failed || lines.isEmpty {
-          HyRow(title: failed ? "Не удалось прочитать журнал" : "Событий пока нет",
-                symbol: "list.bullet.rectangle", disclosure: false)
-            .padding(12)
-        } else {
-          ForEach(lines.indices, id: \.self) { index in
-            let line = lines[index]
-            let split = line.range(of: "  ")
+    let calendar = Calendar.autoupdatingCurrent
+    let days = Dictionary(grouping: events) { calendar.startOfDay(for: $0.date) }
+    return List {
+      if loading { ProgressView("Читаем журнал") }
+      if failed || (!loading && events.isEmpty) {
+        Label(failed ? "Не удалось прочитать журнал" : "Событий пока нет",
+              systemImage: failed ? "exclamationmark.circle" : "clock")
+          .foregroundStyle(failed ? HyStyle.failure : HyStyle.muted)
+          .listRowBackground(HyStyle.surface)
+      }
+      ForEach(days.keys.sorted(by: >), id: \.self) { day in
+        Section {
+          ForEach(days[day] ?? [], id: \.self) { event in
             VStack(alignment: .leading, spacing: 5) {
-              if let split {
-                Text(line[..<split.lowerBound]).font(.caption.monospacedDigit().weight(.medium))
-                  .foregroundStyle(HyStyle.muted)
-              }
-              Text(split.map { String(line[$0.upperBound...]) } ?? line)
-                .font(.body.weight(.medium)).foregroundStyle(HyStyle.ink)
-                .textSelection(.enabled)
+              Text(event.date.formatted(date: .omitted, time: .standard))
+                .font(.caption.monospacedDigit()).foregroundStyle(HyStyle.muted)
+              Text(event.message).font(.body).foregroundStyle(HyStyle.ink).textSelection(.enabled)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            if index < lines.count - 1 { Divider().overlay(HyStyle.stroke).padding(.horizontal, 12) }
+            .padding(.vertical, 4)
+            .listRowBackground(HyStyle.surface)
           }
+        } header: {
+          Text(day.formatted(date: .abbreviated, time: .omitted))
         }
       }
-      .hyCard(padding: 0)
-      .padding(16)
     }
-    .hyScreen()
+    .hyList()
     .navigationTitle("Журнал VPN")
     .navigationBarTitleDisplayMode(.inline)
     .refreshable { await load() }
@@ -151,16 +151,17 @@ struct VPNJournalPage: View {
       }
     }
     .toolbar {
-      Button { UIPasteboard.general.string = lines.joined(separator: "\n") } label: {
+      Button { UIPasteboard.general.string = VPNJournalEvent.lines(events).joined(separator: "\n") } label: {
         Label("Копировать журнал", systemImage: "doc.on.doc")
       }
-      .disabled(lines.isEmpty)
+      .disabled(events.isEmpty)
+      .accessibilityIdentifier("vpn-journal-copy")
     }
   }
 
   private func load() async {
     do {
-      lines = try await client.journal()
+      events = try await client.journal()
       failed = false
     } catch {
       failed = true
@@ -192,6 +193,7 @@ struct TrafficEvent: Decodable, Identifiable {
   }
 
   var detail: String { [profile, rule, error].compactMap { $0 }.joined(separator: " · ") }
+  var isProblem: Bool { error != nil || ["blocked", "dialError", "error"].contains(stage) }
 }
 
 struct TrafficJournalPage: View {
@@ -200,11 +202,13 @@ struct TrafficJournalPage: View {
   @State private var onlyErrors = false
   @State private var writing = false
   @State private var issue: String?
+  @State private var readFailed = false
+  @State private var confirmingClear = false
 
   private var visible: [TrafficEvent] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
     return client.trafficEvents.filter { event in
-      (!onlyErrors || event.error != nil || event.stage == "blocked") &&
+      (!onlyErrors || event.isProblem) &&
         (query.isEmpty || [event.destination, event.detail, String(event.flow)].contains {
           $0.localizedCaseInsensitiveContains(query)
         })
@@ -212,9 +216,10 @@ struct TrafficJournalPage: View {
   }
 
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 12) {
-        VStack(alignment: .leading, spacing: 10) {
+    let events = visible
+    return List {
+      Section {
+        VStack(alignment: .leading, spacing: 6) {
           Toggle("Запись подключений", isOn: Binding(
             get: { client.trafficLogging },
             set: { enabled in Task { await perform { try await client.setTrafficLogging(enabled) } } }
@@ -224,47 +229,57 @@ struct TrafficJournalPage: View {
           Text("Адреса хранятся в памяти VPN. После остановки доступны записи, которые уже открыло приложение.")
             .font(.footnote).foregroundStyle(HyStyle.muted)
           if let issue { Text(issue).font(.footnote).foregroundStyle(HyStyle.failure) }
+          if readFailed {
+            Text("VPN не ответил на запрос журнала.").font(.footnote).foregroundStyle(HyStyle.failure)
+          }
         }
-        .hyCard()
-
-        Picker("События", selection: $onlyErrors) {
-          Text("Все").tag(false)
-          Text("Ошибки и блокировки").tag(true)
+        .padding(.vertical, 4)
+        Button { onlyErrors.toggle() } label: {
+          Label("Только ошибки и блокировки", systemImage: onlyErrors ? "checkmark.circle.fill" : "line.3.horizontal.decrease.circle")
+            .frame(minHeight: 44, alignment: .leading)
         }
-        .pickerStyle(.segmented)
-
-        if visible.isEmpty {
-          Text(emptyMessage)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundStyle(HyStyle.muted)
-            .hyCard()
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("traffic-only-errors")
+        .accessibilityAddTraits(onlyErrors ? .isSelected : [])
+      }
+      .listRowBackground(HyStyle.surface)
+      Section("События") {
+        if events.isEmpty {
+          Text(emptyMessage).foregroundStyle(HyStyle.muted)
+            .accessibilityIdentifier("traffic-empty")
         } else {
-          ForEach(visible) { event in
-            VStack(alignment: .leading, spacing: 4) {
-              Text(event.destination).font(.body.weight(.semibold))
-              Text(event.detail).font(.subheadline).foregroundStyle(HyStyle.ink)
+          ForEach(events) { event in
+            VStack(alignment: .leading, spacing: 5) {
               Text("\(event.date.formatted(date: .omitted, time: .standard)) · \(event.title) · #\(event.flow)")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(event.error == nil ? HyStyle.muted : HyStyle.failure)
+                .foregroundStyle(event.isProblem ? HyStyle.failure : HyStyle.muted)
+              Text(event.destination).font(.body.weight(.semibold))
+              if !event.profile.isEmpty { Text("Профиль · \(event.profile)").foregroundStyle(HyStyle.muted).font(.subheadline) }
+              if let rule = event.rule, !rule.isEmpty {
+                Text("Правило · \(rule)").foregroundStyle(HyStyle.muted).font(.subheadline)
+              }
+              if let error = event.error, !error.isEmpty {
+                Text(error).foregroundStyle(HyStyle.failure).font(.subheadline)
+              }
             }
             .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .hyCard(padding: 12)
+            .padding(.vertical, 4)
           }
         }
       }
-      .padding(16)
+      .listRowBackground(HyStyle.surface)
     }
-    .hyScreen()
+    .hyList()
     .navigationTitle("Журнал подключений")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $search, prompt: "Адрес, профиль или номер")
+    .scrollDismissesKeyboard(.interactively)
     .task(id: client.vpnStatus) {
       guard client.vpnStatus == .connected else { return }
       while !Task.isCancelled {
         if !writing {
-          do { try await client.refreshTrafficLog(); issue = nil }
-          catch { if !Task.isCancelled { issue = "VPN не ответил на запрос журнала." } }
+          do { try await client.refreshTrafficLog(); readFailed = false }
+          catch { if !Task.isCancelled { readFailed = true } }
         }
         do { try await Task.sleep(for: .seconds(2)) } catch { return }
       }
@@ -280,7 +295,7 @@ struct TrafficJournalPage: View {
         }
         .disabled(visible.isEmpty)
         Button(role: .destructive) {
-          Task { await perform { try await client.clearTrafficLog() } }
+          confirmingClear = true
         } label: {
           Label("Очистить журнал", systemImage: "trash")
         }
@@ -288,14 +303,21 @@ struct TrafficJournalPage: View {
       } label: {
         Label("Действия с журналом", systemImage: "ellipsis.circle")
       }
+      .accessibilityIdentifier("traffic-menu")
+    }
+    .confirmationDialog("Очистить журнал подключений?", isPresented: $confirmingClear, titleVisibility: .visible) {
+      Button("Очистить", role: .destructive) {
+        Task { await perform { try await client.clearTrafficLog() } }
+      }
+      Button("Отмена", role: .cancel) {}
     }
   }
 
   private var emptyMessage: String {
+    if !client.trafficEvents.isEmpty { return "Под фильтр ничего не попало." }
     if !client.trafficLogging { return "Включите запись подключений." }
     if client.vpnStatus != .connected { return "Подключите VPN, чтобы увидеть события." }
-    return search.isEmpty && !onlyErrors ? "Откройте сайт или приложение. Здесь появится его маршрут." :
-      "Под фильтр ничего не попало."
+    return "Откройте сайт или приложение. Здесь появится его маршрут."
   }
 
   private func perform(_ operation: () async throws -> Void) async {

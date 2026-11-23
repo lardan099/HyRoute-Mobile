@@ -224,22 +224,33 @@ private struct DashboardSettings: View {
 
   var body: some View {
     List {
-      NavigationLink {
-        VPNRecoveryPage(client: client)
-      } label: {
-        HyRow(title: "Защита VPN", symbol: "shield", disclosure: false)
+      Section("Подключение") {
+        NavigationLink {
+          VPNRecoveryPage(client: client)
+        } label: {
+          HyRow(title: "Защита VPN", symbol: "shield",
+                detail: client.autoReconnect ? "Автовосстановление включено" : "Автовосстановление выключено",
+                disclosure: false)
+        }
       }
-      NavigationLink {
-        VPNJournalPage(client: client)
-      } label: {
-        HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle", disclosure: false)
+      .listRowBackground(HyStyle.surface)
+      Section("Диагностика") {
+        NavigationLink {
+          VPNJournalPage(client: client)
+        } label: {
+          HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle",
+                detail: "Запуски, остановки и сбои туннеля", disclosure: false)
+        }
+        .accessibilityIdentifier("vpn-journal")
+        NavigationLink {
+          TrafficJournalPage(client: client)
+        } label: {
+          HyRow(title: "Журнал подключений", symbol: "waveform.path",
+                detail: "Адреса, маршруты и ошибки", disclosure: false)
+        }
+        .accessibilityIdentifier("traffic-journal")
       }
-      NavigationLink {
-        TrafficJournalPage(client: client)
-      } label: {
-        HyRow(title: "Журнал подключений", symbol: "waveform.path", disclosure: false)
-      }
-      .accessibilityIdentifier("traffic-journal")
+      .listRowBackground(HyStyle.surface)
     }
     .hyList()
     .navigationTitle("Настройки")

@@ -304,6 +304,9 @@ struct RouteCheckPage: View {
   @State private var result: CheckedRoute?
   @State private var message: String?
   @State private var checking = false
+  @FocusState private var field: Field?
+
+  private enum Field: Hashable { case address, ip }
 
   var body: some View {
     ScrollView {
@@ -311,12 +314,18 @@ struct RouteCheckPage: View {
         TextField("Сайт, ссылка или IP", text: $address)
           .textContentType(.URL).keyboardType(.URL)
           .textInputAutocapitalization(.never).autocorrectionDisabled()
+          .focused($field, equals: .address)
+          .submitLabel(.search)
+          .onSubmit { submit() }
           .accessibilityIdentifier("route-check-address")
           .hyCard(padding: 12)
         DisclosureGroup("IP и протокол") {
           VStack(spacing: 8) {
             TextField("IP сайта, если известен", text: $ip)
               .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+              .focused($field, equals: .ip)
+              .submitLabel(.search)
+              .onSubmit { submit() }
             Picker("Протокол", selection: $transport) {
               Text("TCP").tag("tcp")
               Text("UDP").tag("udp")
@@ -326,10 +335,6 @@ struct RouteCheckPage: View {
           .padding(.top, 8)
         }
         .hyCard(padding: 12)
-        Button("Проверить") { Task { await check() } }
-          .buttonStyle(HyButton())
-          .disabled(checking || address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          .accessibilityIdentifier("route-check-submit")
         if let message { Text(message).foregroundStyle(HyStyle.failure) }
         if let result {
           VStack(alignment: .leading, spacing: 8) {
@@ -354,6 +359,18 @@ struct RouteCheckPage: View {
       .disabled(checking)
       .padding(16)
     }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      Button(action: submit) {
+        if checking { HStack { ProgressView().tint(HyStyle.onFill); Text("Проверяем…") } }
+        else { Label("Проверить", systemImage: "magnifyingglass") }
+      }
+      .buttonStyle(HyButton())
+      .disabled(checking || address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      .accessibilityIdentifier("route-check-submit")
+      .padding(.horizontal, 16).padding(.vertical, 8)
+      .background(HyStyle.canvas)
+    }
+    .scrollDismissesKeyboard(.interactively)
     .hyScreen()
     .navigationTitle("Проверить адрес")
     .navigationBarTitleDisplayMode(.inline)
@@ -365,6 +382,12 @@ struct RouteCheckPage: View {
   private func clear() {
     result = nil
     message = nil
+  }
+
+  private func submit() {
+    guard !checking, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    field = nil
+    Task { await check() }
   }
 
   private func check() async {

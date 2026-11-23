@@ -554,7 +554,17 @@ final class Client: ObservableObject, VPNCommandTarget {
     catch { await core.record("vpn_recovery_storage_error") }
   }
 
-  func journal() async throws -> [String] {
+  func journal() async throws -> [VPNJournalEvent] {
+    #if targetEnvironment(simulator)
+    if ProcessInfo.processInfo.environment["HYROUTE_LAYOUT_PREVIEW"] == "vpn-log" {
+      let now = Int64(Date.now.timeIntervalSince1970 * 1000)
+      return [
+        VPNJournalEvent(at: now, message: "VPN подключён"),
+        VPNJournalEvent(at: now - 2_000, message: "Запуск передан iOS"),
+        VPNJournalEvent(at: now - 4_000, message: "Запрошено подключение VPN")
+      ]
+    }
+    #endif
     let events = try await core.journal()
     if [.connected, .reasserting].contains(vpnStatus),
        let session = manager?.connection as? NETunnelProviderSession,
@@ -566,7 +576,7 @@ final class Client: ObservableObject, VPNCommandTarget {
     var seen = Set<VPNJournalEvent>()
     let recent = (events + privateTunnelJournal).sorted { $0.at > $1.at }
       .filter { seen.insert($0).inserted }.prefix(160)
-    return VPNJournalEvent.lines(Array(recent))
+    return Array(recent)
   }
 
   func setTrafficLogging(_ enabled: Bool) async throws {
@@ -608,6 +618,9 @@ final class Client: ObservableObject, VPNCommandTarget {
         }
       }
       handle.simulatorResult = ProbeSnapshot(done: true, results: rows)
+      if scope == "profile", ProcessInfo.processInfo.environment["HYROUTE_SLOW_PROBE"] == "1" {
+        handle.simulatorDelay = .seconds(4)
+      }
       return handle
     }
     #endif
@@ -744,6 +757,17 @@ final class Client: ObservableObject, VPNCommandTarget {
     """
     guard let preview = try? JSONDecoder().decode(ClientState.self, from: Data(fixture.utf8)) else { return false }
     state = preview
+    if ProcessInfo.processInfo.environment["HYROUTE_TEST_LOGS"] == "1" ||
+        ProcessInfo.processInfo.environment["HYROUTE_LAYOUT_PREVIEW"] == "traffic" {
+      let now = Int64(Date.now.timeIntervalSince1970 * 1000)
+      trafficLogging = true
+      trafficEvents = [
+        TrafficEvent(id: 1, flow: 12, time: now, stage: "route", destination: "www.example.test",
+                     profile: "Автовыбор", rule: "Основной маршрут", error: nil),
+        TrafficEvent(id: 2, flow: 11, time: now - 2_000, stage: "dialError", destination: "api.example.test",
+                     profile: "Северный узел", rule: "Проверка API", error: "Тайм-аут соединения")
+      ]
+    }
     ready = true
     return true
   }

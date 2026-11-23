@@ -4,6 +4,8 @@ struct VPNJournalEvent: Decodable, Hashable {
   let at: Int64
   let message: String
 
+  var date: Date { Date(timeIntervalSince1970: Double(at) / 1000) }
+
   static func lines(_ data: Data, timeZone: TimeZone = .autoupdatingCurrent) throws -> [String] {
     lines(try JSONDecoder().decode([Self].self, from: data), timeZone: timeZone)
   }
@@ -13,10 +15,7 @@ struct VPNJournalEvent: Decodable, Hashable {
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = timeZone
     formatter.dateFormat = "dd.MM HH:mm:ss"
-    return events.map { event in
-      let date = Date(timeIntervalSince1970: Double(event.at) / 1000)
-      return formatter.string(from: date) + "  " + event.message
-    }
+    return events.map { formatter.string(from: $0.date) + "  " + $0.message }
   }
 }
 
@@ -178,12 +177,70 @@ struct CheckedRoute: Decodable {
 }
 
 struct RouteRule: Codable {
+  struct AppMatch: Codable {
+    let pattern: String
+    let kind: String?
+    let inheritChildren: Bool?
+  }
+
+  struct DomainMatch: Codable {
+    let pattern: String
+  }
+
+  private struct PortText: Codable {
+    let value: String
+
+    init(_ value: String) { self.value = value }
+
+    init(from decoder: Decoder) throws {
+      let stored = try decoder.singleValueContainer()
+      if let text = try? stored.decode(String.self) {
+        value = text
+        return
+      }
+      var list = try decoder.unkeyedContainer()
+      var values: [String] = []
+      while !list.isAtEnd {
+        if let text = try? list.decode(String.self) { values.append(text) }
+        else { values.append(String(try list.decode(UInt.self))) }
+      }
+      value = values.joined(separator: ",")
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var stored = encoder.singleValueContainer()
+      try stored.encode(value)
+    }
+  }
+
   var action: RouteAction = .tunnel
   var domains: [String]?
-  var ports: String?
+  private var portText: PortText?
   var `protocol`: String?
   var profile: String?
   var enabled: Bool?
+  var id: String?
+  var name: String?
+  var apps: [AppMatch]?
+  var app: AppMatch?
+  var domain: DomainMatch?
+  var fallback: [String]?
+  var failMode: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case action, domains, portText = "ports", `protocol`, profile, enabled, id, name, apps, app, domain, fallback, failMode
+  }
+
+  init() {}
+
+  var ports: String? {
+    get { portText?.value }
+    set { portText = newValue.map(PortText.init) }
+  }
+
+  var destinations: [String] {
+    (domains ?? []) + (domain.map { [$0.pattern] } ?? [])
+  }
 
   func hasUnavailableProfile(available: Set<String>) -> Bool {
     guard enabled != false, action == .tunnel, let profile, !profile.isEmpty else { return false }
@@ -191,7 +248,8 @@ struct RouteRule: Codable {
   }
 
   var title: String {
-    var parts = (domains ?? []).map(RuleDomainCondition.summary)
+    if let name, !name.isEmpty { return name }
+    var parts = destinations.map(RuleDomainCondition.summary)
     if let ports, !ports.isEmpty { parts.append("Порт \(ports)") }
     if let `protocol`, !`protocol`.isEmpty { parts.append(`protocol`.uppercased()) }
     return parts.isEmpty ? "Любое назначение" : parts.joined(separator: " · ")
@@ -200,6 +258,8 @@ struct RouteRule: Codable {
 
 struct Routing: Codable {
   var defaultAction: RouteAction = .tunnel
+  var defaultProfile: String?
+  var defaultFallback: [String]?
   var rules: [RouteRule] = []
   var viaProfiles: [String: String] = [:]
 
@@ -219,6 +279,8 @@ struct Routing: Codable {
   init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     defaultAction = try values.decodeIfPresent(RouteAction.self, forKey: .defaultAction) ?? .tunnel
+    defaultProfile = try values.decodeIfPresent(String.self, forKey: .defaultProfile)
+    defaultFallback = try values.decodeIfPresent([String].self, forKey: .defaultFallback)
     rules = try values.decodeIfPresent([RouteRule].self, forKey: .rules) ?? []
     viaProfiles = try values.decodeIfPresent([String: String].self, forKey: .viaProfiles) ?? [:]
   }

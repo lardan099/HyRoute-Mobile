@@ -1,11 +1,13 @@
 import XCTest
 
 final class SubscriptionAndRulesTests: XCTestCase {
-  private func launch(screen: String = "home") -> XCUIApplication {
+  private func launch(screen: String = "home", slowProbe: Bool = false, traffic: Bool = false) -> XCUIApplication {
     continueAfterFailure = false
     let app = XCUIApplication()
     app.launchEnvironment["HYROUTE_LAYOUT_PREVIEW"] = screen
     app.launchEnvironment["HYROUTE_UI_TEST"] = "1"
+    if slowProbe { app.launchEnvironment["HYROUTE_SLOW_PROBE"] = "1" }
+    if traffic { app.launchEnvironment["HYROUTE_TEST_LOGS"] = "1" }
     app.launch()
     return app
   }
@@ -81,7 +83,59 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(app.buttons["traffic-journal"])
     XCTAssertTrue(app.navigationBars["Журнал подключений"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.switches["trafficLogging"].exists)
-    XCTAssertTrue(app.segmentedControls.buttons["Ошибки и блокировки"].exists)
+    XCTAssertTrue(app.buttons["traffic-only-errors"].exists)
+  }
+
+  func testTrafficFilterAndClearRequireConfirmation() {
+    let app = launch(traffic: true)
+    tap(app.buttons["dashboard-settings"])
+    tap(app.buttons["traffic-journal"])
+    let good = app.staticTexts["www.example.test"]
+    let failed = app.staticTexts["api.example.test"]
+    XCTAssertTrue(good.waitForExistence(timeout: 10))
+    XCTAssertTrue(failed.exists)
+    let filter = app.buttons["traffic-only-errors"]
+    tap(filter)
+    XCTAssertFalse(good.exists)
+    XCTAssertTrue(failed.exists)
+    tap(app.buttons["traffic-menu"])
+    tap(app.buttons["Очистить журнал"])
+    tap(app.buttons["Отмена"])
+    XCTAssertTrue(failed.exists)
+    tap(app.buttons["traffic-menu"])
+    tap(app.buttons["Очистить журнал"])
+    tap(app.buttons["Очистить"])
+    XCTAssertTrue(app.staticTexts["traffic-empty"].waitForExistence(timeout: 10))
+    XCTAssertFalse(failed.exists)
+  }
+
+  func testVPNJournalShowsEventsAndCopyAction() {
+    let app = launch(screen: "vpn-log")
+    XCTAssertTrue(app.staticTexts["Запуск передан iOS"].waitForExistence(timeout: 10))
+    let copy = app.buttons["vpn-journal-copy"]
+    XCTAssertTrue(copy.isEnabled)
+    tap(copy)
+    XCTAssertTrue(app.navigationBars["Журнал VPN"].exists)
+  }
+
+  func testCancellingProbeRestoresLastMeasuredResult() {
+    let app = launch(slowProbe: true)
+    tap(app.buttons["tab-subscriptions"])
+    tap(app.buttons["subscription-preview"])
+    let button = app.buttons["subscription-check-all"]
+    tap(button)
+    let result = app.staticTexts["subscription-result-fi"]
+    XCTAssertTrue(result.waitForExistence(timeout: 10))
+    XCTAssertEqual(result.label, "42 мс")
+    let single = app.buttons["subscription-check-fi"]
+    tap(single)
+    XCTAssertTrue(button.label.contains("Остановить"))
+    tap(button)
+    XCTAssertTrue(result.waitForExistence(timeout: 10))
+    XCTAssertEqual(result.label, "42 мс")
+    tap(single)
+    let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "33 мс"), object: result)
+    XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 12), .completed)
   }
 
   func testSelectsServerFromSubscriptionOnHome() {
@@ -252,6 +306,11 @@ final class SubscriptionAndRulesTests: XCTestCase {
     let result = app.descendants(matching: .any)["route-check-action"].firstMatch
     XCTAssertTrue(result.waitForExistence(timeout: 10))
     XCTAssertEqual(result.label, "Напрямую")
+    address.tap()
+    if let old = address.value as? String { address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count)) }
+    address.typeText("m.youtube.com")
+    tap(app.buttons["route-check-submit"])
+    XCTAssertTrue(app.staticTexts["YouTube через запасной"].waitForExistence(timeout: 10))
   }
 
   func testNewChainRejectsACycleAndKeepsDraft() {

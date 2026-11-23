@@ -100,7 +100,11 @@ private struct RootView: View {
     Group {
       if client.ready {
         ZStack {
-          panel(.home) { Dashboard(client: client) }
+          panel(.home) {
+            if previewScreen == "vpn-log" { VPNJournalPage(client: client) }
+            else if previewScreen == "traffic" { TrafficJournalPage(client: client) }
+            else { Dashboard(client: client) }
+          }
           panel(.subscriptions) {
             if previewScreen == "servers", let id = client.state.subscriptions.first?.id {
               SubscriptionPage(client: client, id: id)
@@ -322,40 +326,46 @@ private struct SubscriptionsPage: View {
   @State private var adding = false
 
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 10) {
-        if client.state.subscriptions.isEmpty {
+    List {
+      Section {
+        NavigationLink {
+          ServerGroupsPage(client: client)
+        } label: {
+          let count = client.state.serverGroups?.count ?? 0
+          HyRow(title: "Группы серверов", symbol: "square.stack.3d.up",
+                detail: count > 0 ? "Групп: \(count)" : nil, disclosure: false)
+        }
+        .accessibilityIdentifier("manage-server-groups")
+        .listRowBackground(HyStyle.surface)
+      }
+
+      if client.state.subscriptions.isEmpty {
+        Section {
           VStack(alignment: .leading, spacing: 12) {
-            HyIcon(symbol: "server.rack", size: 48)
             HyHeading(text: "Подписок пока нет")
             Text("Добавьте ссылку или конфиг VPN.").foregroundStyle(HyStyle.muted)
             Button { adding = true } label: { Label("Добавить подписку", systemImage: "plus") }
               .buttonStyle(HyButton())
           }
-          .hyCard(padding: 16)
+          .padding(.vertical, 6)
         }
-        ForEach(client.state.subscriptions) { item in
-          NavigationLink {
-            SubscriptionPage(client: client, id: item.id)
-          } label: {
-            HyRow(title: item.name, symbol: "square.stack", detail: "Профилей: \(item.servers.count)")
-              .hyCard(padding: 12)
+        .listRowBackground(HyStyle.surface)
+      } else {
+        Section("Мои подписки") {
+          ForEach(client.state.subscriptions) { item in
+            NavigationLink {
+              SubscriptionPage(client: client, id: item.id)
+            } label: {
+              HyRow(title: item.name, symbol: "link",
+                    detail: "Серверов: \(item.servers.filter { $0.missing != true }.count)", disclosure: false)
+            }
+            .accessibilityIdentifier("subscription-\(item.id)")
+            .listRowBackground(HyStyle.surface)
           }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("subscription-\(item.id)")
         }
-        NavigationLink {
-          ServerGroupsPage(client: client)
-        } label: {
-          HyRow(title: "Управление группами", symbol: "server.rack")
-            .hyCard(padding: 12)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("manage-server-groups")
       }
-      .padding(16)
     }
-    .hyScreen()
+    .hyList()
     .navigationTitle("Подписки")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -373,6 +383,7 @@ private struct SubscriptionProbe {
   let token = UUID()
   let scope: String
   let id: String
+  let previousResults: [String: [ProbeSnapshot.Row]]
 }
 
 struct SubscriptionPage: View {
@@ -386,61 +397,81 @@ struct SubscriptionPage: View {
   var body: some View {
     if let item = client.state.subscriptions.first(where: { $0.id == id }) {
       ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          HStack(spacing: 10) {
-            Button {
-              if measurement != nil { cancelMeasurement() }
-              else { startMeasurement(scope: "subscription", id: id) }
-            } label: {
-              Label(measurement == nil ? "Проверить все" : "Остановить",
-                    systemImage: measurement == nil ? "speedometer" : "stop.circle")
-            }
-            .buttonStyle(HyButton())
-            .accessibilityIdentifier("subscription-check-all")
-            .disabled(measurement == nil && !item.servers.contains { $0.missing != true })
-            if item.canRefresh == true {
-              Button { Task { await client.refresh(id) } } label: {
-                Group {
-                  if client.busy { ProgressView().tint(HyStyle.accent) }
-                  else { Image(systemName: "arrow.clockwise").font(.body.weight(.semibold)) }
-                }
-                .foregroundStyle(HyStyle.accent)
-                .frame(width: 48, height: 48)
-                .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 12))
-                .contentShape(Rectangle())
-              }
-              .buttonStyle(.plain)
-              .accessibilityLabel("Обновить подписку")
-              .disabled(client.busy || measurement != nil)
-            }
-          }
-          if measurementError {
-            Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
-              .accessibilityIdentifier("subscription-probe-error")
-          }
+        VStack(alignment: .leading, spacing: 12) {
           if item.refreshFailed == true || (item.refreshedAt ?? 0) > 0 ||
               item.usedBytes != nil || item.limitBytes != nil || (item.expiresAt ?? 0) > 0 {
             SubscriptionDetails(item: item)
           }
-          LazyVStack(spacing: 0) {
-            ForEach(item.servers) { profile in
-              serverRow(profile)
-              if profile.id != item.servers.last?.id {
-                Divider().overlay(HyStyle.stroke).padding(.leading, 60)
+          if item.servers.isEmpty {
+            Text("В подписке пока нет серверов.").foregroundStyle(HyStyle.muted)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          } else {
+            LazyVStack(spacing: 0) {
+              ForEach(item.servers) { profile in
+                serverRow(profile)
+                if profile.id != item.servers.last?.id {
+                  Divider().overlay(HyStyle.stroke).padding(.leading, 52)
+                }
               }
             }
+            .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 14))
           }
-          .hyCard(padding: 0)
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+      }
+      .safeAreaInset(edge: .top, spacing: 0) {
+        probeControls(item)
       }
       .hyScreen()
       .navigationTitle(item.name)
       .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        if item.canRefresh == true {
+          ToolbarItem(placement: .primaryAction) {
+            Button { Task { await client.refresh(id) } } label: {
+              if client.busy { ProgressView().tint(HyStyle.accent) }
+              else { Label("Обновить подписку", systemImage: "arrow.clockwise") }
+            }
+            .disabled(client.busy || measurement != nil)
+            .accessibilityIdentifier("subscription-refresh")
+          }
+        }
+      }
       .task(id: measurement?.token) {
         if let measurement { await measure(measurement) }
       }
+    } else {
+      Text("Подписка недоступна").foregroundStyle(HyStyle.muted)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .hyScreen()
+        .navigationTitle("Подписка")
     }
+  }
+
+  private func probeControls(_ item: Subscription) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      if measurement != nil {
+        ProgressView().tint(HyStyle.accent).accessibilityLabel("Идёт замер задержки")
+      }
+      Button {
+        if measurement != nil { cancelMeasurement() }
+        else { startMeasurement(scope: "subscription", id: id) }
+      } label: {
+        Label(measurement == nil ? "Проверить все" : "Остановить",
+              systemImage: measurement == nil ? "speedometer" : "stop.circle")
+      }
+      .buttonStyle(HyButton(prominent: measurement == nil))
+      .accessibilityIdentifier("subscription-check-all")
+      .disabled(measurement == nil && (client.busy || !item.servers.contains { $0.missing != true }))
+      if measurementError {
+        Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
+          .accessibilityIdentifier("subscription-probe-error")
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .background(HyStyle.canvas)
   }
 
   private func serverRow(_ profile: VPNProfile) -> some View {
@@ -452,17 +483,17 @@ struct SubscriptionPage: View {
         }
         .buttonStyle(.plain)
         .disabled(client.busy || profile.missing == true)
+        .accessibilityIdentifier("subscription-profile-\(profile.id)")
         if profile.missing != true {
           Button { startMeasurement(scope: "profile", id: profile.id) } label: {
             Image(systemName: "speedometer")
               .font(.body.weight(.semibold))
               .foregroundStyle(HyStyle.accent)
               .frame(width: 44, height: 44)
-              .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
               .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .disabled(measurement != nil)
+          .disabled(client.busy || measurement != nil)
           .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
           .accessibilityIdentifier("subscription-check-\(profile.id)")
         }
@@ -472,11 +503,12 @@ struct SubscriptionPage: View {
           if expanded { expandedGroups.insert(profile.id) } else { expandedGroups.remove(profile.id) }
         })) {
           ForEach(rows.indices, id: \.self) { index in
-            HStack {
-              Text(rows[index].host ?? "Узел \(index + 1)").lineLimit(1)
-              Spacer(minLength: 6)
-              Text(rows[index].label).monospacedDigit()
-                .foregroundStyle(rows[index].ms == nil ? HyStyle.muted : HyStyle.success)
+            let host = rows[index].host ?? "Узел \(index + 1)"
+            let delay = Text(rows[index].label).monospacedDigit()
+              .foregroundStyle(rows[index].ms == nil ? HyStyle.muted : HyStyle.success)
+            ViewThatFits(in: .horizontal) {
+              HStack { Text(host).fixedSize(); Spacer(minLength: 6); delay.fixedSize() }
+              VStack(alignment: .leading, spacing: 2) { Text(host); delay }
             }
             .padding(.vertical, 4)
           }
@@ -506,17 +538,23 @@ struct SubscriptionPage: View {
 
   private func startMeasurement(scope: String, id: String) {
     measurementError = false
+    let previous = results
     if scope == "subscription" { results.removeAll() }
     else {
       results.removeValue(forKey: id)
       expandedGroups.insert(id)
     }
-    measurement = SubscriptionProbe(scope: scope, id: id)
+    measurement = SubscriptionProbe(scope: scope, id: id, previousResults: previous)
   }
 
   private func cancelMeasurement() {
+    guard let request = measurement else { return }
+    let completed = results.compactMapValues { rows -> [ProbeSnapshot.Row]? in
+      let final = rows.filter { !["pending", "running"].contains($0.status) }
+      return final.isEmpty ? nil : final
+    }
+    results = request.previousResults.merging(completed) { _, newer in newer }
     measurement = nil
-    results = results.mapValues { $0.filter { $0.status != "pending" && $0.status != "running" } }
   }
 
   private func measure(_ request: SubscriptionProbe) async {
@@ -538,7 +576,10 @@ struct SubscriptionPage: View {
       }
       await handle.cancel()
     } catch {
-      if !Task.isCancelled && measurement?.token == request.token { measurementError = true }
+      if !Task.isCancelled && measurement?.token == request.token {
+        cancelMeasurement()
+        measurementError = true
+      }
     }
   }
 }

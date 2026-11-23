@@ -9,8 +9,10 @@ struct StateCompatibility {
           {"id":"server","name":"Netherlands","host":"node.example","protocol":"vless"},
           {"id":"auto","name":"⚡️ Автовыбор","protocol":"vless","balance":true,"balanceStrategy":"leastPing"}
         ]}],
-        "settings":{"selected":"server","routing":{"defaultAction":"direct","rules":[
-          {"action":"tunnel","domains":["geosite:youtube"],"ports":"443","protocol":"tcp","profile":"auto"}
+        "settings":{"selected":"server","routing":{"defaultAction":"direct","defaultProfile":"server","defaultFallback":["auto"],"rules":[
+          {"id":"video","name":"YouTube","action":"tunnel","domains":["geosite:youtube"],"domain":{"pattern":".youtube.com"},
+           "ports":[443,"8000-8100"],"protocol":"tcp","profile":"auto","fallback":["server"],"failMode":"closed",
+           "apps":[{"pattern":"com.example.video","kind":"package","inheritChildren":true}]}
         ],"viaProfiles":{"auto":"server"}}}
       }
       """#.utf8)
@@ -24,9 +26,19 @@ struct StateCompatibility {
     let routing = decoded?["routing"] as? [String: Any]
     let rules = routing?["rules"] as? [[String: Any]]
     precondition(routing?["defaultAction"] as? String == "direct")
+    precondition(routing?["defaultProfile"] as? String == "server")
+    precondition(routing?["defaultFallback"] as? [String] == ["auto"])
     precondition(routing?["viaProfiles"] as? [String: String] == ["auto": "server"])
     precondition(rules?.first?["protocol"] as? String == "tcp")
     precondition(rules?.first?["profile"] as? String == "auto")
+    precondition(rules?.first?["ports"] as? String == "443,8000-8100")
+    precondition(rules?.first?["id"] as? String == "video")
+    precondition(rules?.first?["name"] as? String == "YouTube")
+    precondition(rules?.first?["fallback"] as? [String] == ["server"])
+    precondition(rules?.first?["failMode"] as? String == "closed")
+    precondition((rules?.first?["domain"] as? [String: String])?["pattern"] == ".youtube.com")
+    precondition((rules?.first?["apps"] as? [[String: Any]])?.first?["inheritChildren"] as? Bool == true)
+    precondition(state.settings.routing.rules.first?.destinations == ["geosite:youtube", ".youtube.com"])
     precondition(state.settings.routing.unavailableChainExits(available: ["auto", "server"]).isEmpty)
     var broken = state.settings.routing
     broken.viaProfiles["old"] = "auto"
