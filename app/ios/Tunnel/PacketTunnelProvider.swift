@@ -3,12 +3,19 @@ import Foundation
 import NetworkExtension
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
+  private struct StartRequest {
+    let state: String
+    let generation: Int
+    let completion: (Error?) -> Void
+  }
+
   private let worker = DispatchQueue(label: "io.hyroute.tunnel")
   private var packetBridge: PacketBridge?
   private var session: NSObject?
   private var probe: NSObject?
   private var probeToken: UUID?
   private var generation = 0
+  private var pendingGeodata: (token: UUID, request: StartRequest)?
   private lazy var geodataReceiver: GeodataReceiver? = {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first.map {
       GeodataReceiver(directory: $0.appendingPathComponent("hyroute-tunnel-geo", isDirectory: true))
@@ -17,12 +24,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
     worker.async {
+      self.cancelGeodataStart(.cancelled)
       self.generation += 1
-      let generation = self.generation
       let manualState = options?["state"] as? String
-      let source = manualState == nil ? VPNStorage.sharedGeodata : self.geodataReceiver?.directory
-      let geodata = source ?? FileManager.default.temporaryDirectory
-        .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
       let journal = VPNStorage.tunnelJournal
       HyRouteRecordVPNEvent(journal, "vpn_provider_start")
       let recoveryEnabled = (self.protocolConfiguration as? NETunnelProviderProtocol)?
@@ -33,47 +37,103 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler(TunnelStartError.missingOptions)
         return
       }
-      if manualState == nil { HyRouteRecordVPNEvent(journal, "vpn_system_restart") }
-      var issue: NSString?
-      guard let plan = HyRoutePlanVPN(state, geodata.path, &issue) else {
-        let failure = TunnelStartError.planFailure(issue as String?,
-          sharedGeodataAvailable: manualState != nil || (source != nil && FileManager.default.isReadableFile(atPath: geodata.path)))
-        HyRouteRecordVPNEvent(journal, failure.journalEvent)
-        completionHandler(failure)
-        return
+      let request = StartRequest(state: state, generation: self.generation, completion: completionHandler)
+      if manualState == nil {
+        HyRouteRecordVPNEvent(journal, "vpn_system_restart")
+        let shared = VPNStorage.sharedGeodata
+        self.openTunnel(request, geodata: shared ?? Self.emptyGeodataDirectory,
+                        sharedGeodataAvailable: shared.map { FileManager.default.isReadableFile(atPath: $0.path) } ?? false)
+      } else if let data = options?["geoSnapshot"] as? Data, data.count <= GeodataTransfer.inlineLimit {
+        self.openWithGeodata(request) { HyRouteInstallVPNGeodataSnapshot(data, $0.path) }
+      } else if let tokenText = options?["geoTransferToken"] as? String, let token = UUID(uuidString: tokenText) {
+        self.pendingGeodata = (token, request)
+        self.worker.asyncAfter(deadline: .now() + GeodataTransfer.startupTimeout) { [weak self] in
+          guard let self, self.pendingGeodata?.token == token else { return }
+          self.cancelGeodataStart(.geodataTransfer)
+        }
+      } else if HyRouteVPNGeodataKinds(state).isEmpty {
+        self.openTunnel(request, geodata: Self.emptyGeodataDirectory)
+      } else {
+        self.failGeodataStart(request)
       }
-      guard let prepared = HyRoutePrepareVPN(plan) else {
-        HyRouteRecordVPNEvent(journal, TunnelStartError.preparation.journalEvent)
-        completionHandler(TunnelStartError.preparation)
-        return
-      }
+    }
+  }
 
-      HyRouteRecordVPNEvent(journal, "vpn_interface")
-      self.setTunnelNetworkSettings(Self.networkSettings()) { error in
-        self.worker.async {
-          guard generation == self.generation else {
-            completionHandler(TunnelStartError.cancelled)
-            return
+  private static var emptyGeodataDirectory: URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
+  }
+
+  private func openWithGeodata(_ request: StartRequest, install: (URL) -> Bool) {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("hyroute-vpn-geo-\(UUID().uuidString)", isDirectory: true)
+    let files = FileManager.default
+    defer { try? files.removeItem(at: directory) }
+    do {
+      try files.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+      guard install(directory) else {
+        failGeodataStart(request)
+        return
+      }
+      openTunnel(request, geodata: directory)
+    } catch {
+      failGeodataStart(request)
+    }
+  }
+
+  private func failGeodataStart(_ request: StartRequest) {
+    let error = TunnelStartError.geodataTransfer
+    HyRouteRecordVPNEvent(VPNStorage.tunnelJournal, error.journalEvent)
+    request.completion(error)
+  }
+
+  private func cancelGeodataStart(_ error: TunnelStartError) {
+    guard let pending = pendingGeodata else { return }
+    pendingGeodata = nil
+    geodataReceiver?.abort()
+    HyRouteRecordVPNEvent(VPNStorage.tunnelJournal, error.journalEvent)
+    pending.request.completion(error)
+  }
+
+  private func openTunnel(_ request: StartRequest, geodata: URL, sharedGeodataAvailable: Bool = true) {
+    let journal = VPNStorage.tunnelJournal
+    var issue: NSString?
+    guard let plan = HyRoutePlanVPN(request.state, geodata.path, &issue) else {
+      let failure = TunnelStartError.planFailure(issue as String?, sharedGeodataAvailable: sharedGeodataAvailable)
+      HyRouteRecordVPNEvent(journal, failure.journalEvent)
+      request.completion(failure)
+      return
+    }
+    guard let prepared = HyRoutePrepareVPN(plan) else {
+      HyRouteRecordVPNEvent(journal, TunnelStartError.preparation.journalEvent)
+      request.completion(TunnelStartError.preparation)
+      return
+    }
+
+    HyRouteRecordVPNEvent(journal, "vpn_interface")
+    self.setTunnelNetworkSettings(Self.networkSettings()) { error in
+      self.worker.async {
+        guard request.generation == self.generation else {
+          request.completion(TunnelStartError.cancelled)
+          return
+        }
+        do {
+          if let error { throw error }
+          let bridge = try PacketBridge(flow: self.packetFlow, queue: self.worker)
+          guard let session = HyRouteStartVPN(prepared, bridge.coreFD) else {
+            bridge.close()
+            throw TunnelStartError.engine
           }
-          do {
-            if let error { throw error }
-            let bridge = try PacketBridge(flow: self.packetFlow, queue: self.worker)
-            guard let session = HyRouteStartVPN(prepared, bridge.coreFD) else {
-              bridge.close()
-              throw TunnelStartError.engine
-            }
-            self.packetBridge = bridge
-            self.session = session
-            bridge.start()
-            HyRouteRecordVPNEvent(journal, "vpn_running")
-            completionHandler(nil)
-          } catch {
-            let startError = error as? TunnelStartError ?? .networkSettings
-            let detail = error as NSError
-            let source = detail.domain == TunnelStartError.errorDomain ? "PacketTunnel" : detail.domain
-            HyRouteRecordVPNError(journal, startError.journalEvent, source, Int32(clamping: detail.code))
-            completionHandler(startError)
-          }
+          self.packetBridge = bridge
+          self.session = session
+          bridge.start()
+          HyRouteRecordVPNEvent(journal, "vpn_running")
+          request.completion(nil)
+        } catch {
+          let startError = error as? TunnelStartError ?? .networkSettings
+          let detail = error as NSError
+          let source = detail.domain == TunnelStartError.errorDomain ? "PacketTunnel" : detail.domain
+          HyRouteRecordVPNError(journal, startError.journalEvent, source, Int32(clamping: detail.code))
+          request.completion(startError)
         }
       }
     }
@@ -82,6 +142,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
     worker.async {
       self.generation += 1
+      self.cancelGeodataStart(.cancelled)
       if let probe = self.probe { HyRouteCancelProbe(probe) }
       self.probe = nil
       self.probeToken = nil
@@ -97,13 +158,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   override func handleAppMessage(_ data: Data, completionHandler: ((Data?) -> Void)?) {
     worker.async {
       if data.count <= 64 * 1024, let transfer = try? PropertyListDecoder().decode(GeodataTransfer.self, from: data) {
-        let reply: GeodataTransfer.Reply?
         if transfer.action == .checkRecovery {
-          reply = Self.recoveryStorageAvailable() ? .ready : nil
-        } else {
-          reply = self.session == nil ? self.geodataReceiver?.receive(transfer) : nil
+          completionHandler?(Self.recoveryStorageAvailable() ? GeodataTransfer.Reply.ready.data : nil)
+          return
         }
+        guard let pending = self.pendingGeodata, pending.token == transfer.token,
+              let receiver = self.geodataReceiver else {
+          completionHandler?(nil)
+          return
+        }
+        if transfer.action == .awaitingSnapshot {
+          completionHandler?(GeodataTransfer.Reply.ready.data)
+          return
+        }
+        let reply = receiver.receive(transfer)
         completionHandler?(reply?.data)
+        if (transfer.action == .begin && reply == .current) || (transfer.action == .finish && reply == .ready) {
+          self.pendingGeodata = nil
+          self.openWithGeodata(pending.request) { HyRouteInstallVPNGeodataSnapshotFile(receiver.archive.path, $0.path) }
+        } else if transfer.action == .cancel {
+          self.cancelGeodataStart(.geodataTransfer)
+        }
         return
       }
       guard let command = try? JSONDecoder().decode(ProbeCommand.self, from: data) else {

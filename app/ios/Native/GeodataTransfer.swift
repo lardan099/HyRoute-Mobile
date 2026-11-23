@@ -1,21 +1,16 @@
 import CryptoKit
 import Foundation
 
-enum GeodataKind: String, Codable {
-  case geoip, geosite
-
-  var filename: String { rawValue + ".dat" }
-}
-
 struct GeodataTransfer: Codable {
-  enum Action: String, Codable { case begin, append, finish, clear, cancel, checkRecovery }
+  enum Action: String, Codable { case begin, append, finish, cancel, checkRecovery, awaitingSnapshot }
 
   static let chunkSize = 48 * 1024
-  static let maximumSize = 300 * 1024 * 1024
+  static let inlineLimit = 24 * 1024
+  static let startupTimeout: TimeInterval = 30
+  static let maximumSize = 64 * 1024 * 1024
 
   let action: Action
   let token: UUID
-  var kind: GeodataKind?
   var fingerprint: Fingerprint?
   var chunk: Data?
 
@@ -45,24 +40,15 @@ struct GeodataTransfer: Codable {
     }
   }
 
-  static func send(_ kind: GeodataKind, from directory: URL,
-                   exchange: (Self) async throws -> Reply) async throws {
-    let token = UUID()
-    let source = directory.appendingPathComponent(kind.filename)
-    let reader: FileHandle
-    do { reader = try FileHandle(forReadingFrom: source) }
-    catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-      _ = try await exchange(Self(action: .clear, token: token, kind: kind))
-      return
-    }
-    defer { try? reader.close() }
-    let fingerprint = try Fingerprint.read(reader)
-    guard fingerprint.isValid else { throw CocoaError(.fileReadCorruptFile) }
-    let reply = try await exchange(Self(action: .begin, token: token, kind: kind, fingerprint: fingerprint))
+  static func sendSnapshot(_ data: Data, token: UUID, exchange: (Self) async throws -> Reply) async throws {
+    let fingerprint = Fingerprint(size: data.count, digest: Data(SHA256.hash(data: data)))
+    guard fingerprint.isValid else { throw CocoaError(.fileReadTooLarge) }
+    let reply = try await exchange(Self(action: .begin, token: token, fingerprint: fingerprint))
     if reply == .current { return }
     do {
-      while let chunk = try reader.read(upToCount: chunkSize), !chunk.isEmpty {
+      for offset in stride(from: 0, to: data.count, by: chunkSize) {
         try Task.checkCancellation()
+        let chunk = data.subdata(in: offset..<min(offset + chunkSize, data.count))
         _ = try await exchange(Self(action: .append, token: token, chunk: chunk))
       }
       _ = try await exchange(Self(action: .finish, token: token))
@@ -73,24 +59,25 @@ struct GeodataTransfer: Codable {
   }
 }
 
-// Each file is verified before replacing its existing copy in the tunnel sandbox.
+// The archive is verified before replacing its existing copy in the tunnel sandbox.
 // The provider calls this receiver only on its serial worker queue.
 final class GeodataReceiver {
   private struct Pending {
     let token: UUID
-    let kind: GeodataKind
     let expected: GeodataTransfer.Fingerprint
     let file: FileHandle
     var size = 0
     var hash = SHA256()
   }
 
-  let directory: URL
+  private let directory: URL
+  let archive: URL
   private let staging: URL
   private var pending: Pending?
 
   init(directory: URL) {
     self.directory = directory
+    archive = directory.appendingPathComponent("snapshot.zip")
     staging = directory.appendingPathComponent(".incoming")
   }
 
@@ -105,18 +92,17 @@ final class GeodataReceiver {
   private func process(_ request: GeodataTransfer) throws -> GeodataTransfer.Reply? {
     let files = FileManager.default
     switch request.action {
-    case .checkRecovery:
+    case .checkRecovery, .awaitingSnapshot:
       return nil
     case .begin:
-      guard let kind = request.kind, let expected = request.fingerprint, expected.isValid else { return nil }
+      guard let expected = request.fingerprint, expected.isValid else { return nil }
       abort()
       var folder = directory
       try files.createDirectory(at: folder, withIntermediateDirectories: true)
       var attributes = URLResourceValues()
       attributes.isExcludedFromBackup = true
       try folder.setResourceValues(attributes)
-      let existing = folder.appendingPathComponent(kind.filename)
-      if let reader = try? FileHandle(forReadingFrom: existing) {
+      if let reader = try? FileHandle(forReadingFrom: archive) {
         defer { try? reader.close() }
         if (try? GeodataTransfer.Fingerprint.read(reader)) == expected { return .current }
       }
@@ -125,7 +111,7 @@ final class GeodataReceiver {
       #else
       try Data().write(to: staging)
       #endif
-      pending = Pending(token: request.token, kind: kind, expected: expected,
+      pending = Pending(token: request.token, expected: expected,
                         file: try FileHandle(forWritingTo: staging))
     case .append:
       guard var transfer = pending, transfer.token == request.token else { return nil }
@@ -146,18 +132,12 @@ final class GeodataReceiver {
         return nil
       }
       try transfer.file.close()
-      let destination = directory.appendingPathComponent(transfer.kind.filename)
-      if files.fileExists(atPath: destination.path) {
-        _ = try files.replaceItemAt(destination, withItemAt: staging)
+      if files.fileExists(atPath: archive.path) {
+        _ = try files.replaceItemAt(archive, withItemAt: staging)
       } else {
-        try files.moveItem(at: staging, to: destination)
+        try files.moveItem(at: staging, to: archive)
       }
       pending = nil
-    case .clear:
-      guard let kind = request.kind else { return nil }
-      abort()
-      let destination = directory.appendingPathComponent(kind.filename)
-      if files.fileExists(atPath: destination.path) { try files.removeItem(at: destination) }
     case .cancel:
       guard pending?.token == request.token else { return nil }
       abort()
@@ -165,7 +145,7 @@ final class GeodataReceiver {
     return .ready
   }
 
-  private func abort() {
+  func abort() {
     try? pending?.file.close()
     pending = nil
     try? FileManager.default.removeItem(at: staging)

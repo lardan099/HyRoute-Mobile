@@ -25,6 +25,7 @@ enum TunnelStartError: Int, CustomNSError {
   case configuration = 1, preparation = 2, networkSettings = 3, engine = 4, cancelled = 5
   case missingOptions = 6, unreadableState = 7, noProfile = 8, rules = 9
   case geodata = 10, missingReference = 11, unsupportedProfile = 12, geodataSharedStorage = 13
+  case geodataTransfer = 14
 
   static let errorDomain = "io.hyroute.packet-tunnel"
   var errorCode: Int { rawValue }
@@ -38,6 +39,7 @@ enum TunnelStartError: Int, CustomNSError {
     case .rules: return "vpn_rules_error"
     case .geodata: return "vpn_geo_error"
     case .geodataSharedStorage: return "vpn_geo_shared_error"
+    case .geodataTransfer: return "vpn_geo_bundle_error"
     case .missingReference: return "vpn_reference_missing"
     case .unsupportedProfile: return "vpn_profile_unsupported"
     case .preparation: return "vpn_prepare_error"
@@ -56,6 +58,7 @@ enum TunnelStartError: Int, CustomNSError {
     case .rules: return "Не удалось применить локальные правила. Откройте «Правила» и проверьте условия."
     case .geodata: return "Расширение не нашло базу или категорию GeoSite/GeoIP. Обновите базы в настройках правил."
     case .geodataSharedStorage: return "Расширению недоступны геобазы для автозапуска. Отключите автовосстановление в «Защите VPN» и подключитесь вручную."
+    case .geodataTransfer: return "VPN-расширение не получило или не прочитало категории GeoSite/GeoIP. Подробности в журнале."
     case .missingReference: return "Правило или цепочка использует недоступный профиль. Откройте «Правила» и замените его или удалите связь."
     case .unsupportedProfile: return "Профиль содержит неподдерживаемые параметры соединения."
     case .preparation: return "Не удалось подготовить VPN. Проверьте доступность сервера и настройки профиля."

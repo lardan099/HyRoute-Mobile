@@ -110,7 +110,11 @@ func buildIndex(path string) (map[string]span, error) {
 		return nil, err
 	}
 	defer f.Close()
-	r := bufio.NewReaderSize(f, 1<<20)
+	return indexReader(f)
+}
+
+func indexReader(source io.Reader) (map[string]span, error) {
+	r := bufio.NewReaderSize(source, 1<<20)
 	idx := map[string]span{}
 	var off int64
 	for {

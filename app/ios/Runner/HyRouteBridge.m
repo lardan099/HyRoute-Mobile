@@ -136,6 +136,22 @@ NSString *HyRouteVPNGeodataKinds(NSString *state) {
     return MobileVPNGeodataKinds(state);
 }
 
+NSData * _Nullable HyRouteVPNGeodataSnapshot(NSString *state, NSString *directory) {
+    NSError *error = nil;
+    NSData *data = MobileVPNGeodataSnapshot(state, directory, &error);
+    return error == nil ? data : nil;
+}
+
+BOOL HyRouteInstallVPNGeodataSnapshot(NSData *data, NSString *directory) {
+    NSError *error = nil;
+    return MobileInstallVPNGeodataSnapshot(data, directory, &error);
+}
+
+BOOL HyRouteInstallVPNGeodataSnapshotFile(NSString *path, NSString *directory) {
+    NSError *error = nil;
+    return MobileInstallVPNGeodataSnapshotFile(path, directory, &error);
+}
+
 NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSString * _Nullable * _Nonnull issue) {
     MobileConfigureGeo(geoDirectory);
     MobileIOSVPNPlanResult *result = MobileInspectIOSVPNPlan(state);

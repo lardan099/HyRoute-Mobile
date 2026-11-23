@@ -99,27 +99,43 @@ func geoKind(kind string) (geodata.Kind, error) {
 
 // VPNGeodataKinds lists the databases referenced by active VPN rules.
 func VPNGeodataKinds(raw string) string {
+	refs, _ := vpnGeodataReferences(raw)
+	var kinds []string
+	for _, ref := range refs {
+		if kind := ref.kind.Prefix(); !slices.Contains(kinds, kind) {
+			kinds = append(kinds, kind)
+		}
+	}
+	return strings.Join(kinds, "\n")
+}
+
+type vpnGeoReference struct {
+	kind geodata.Kind
+	name string
+}
+
+func vpnGeodataReferences(raw string) ([]vpnGeoReference, error) {
 	state, err := decodeClientState(raw)
 	if err != nil || len(state.Settings.Routing) == 0 {
-		return ""
+		return nil, err
 	}
 	var cfg routingConfig
 	if err := json.Unmarshal(state.Settings.Routing, &cfg); err != nil {
-		return ""
+		return nil, err
 	}
-	var kinds []string
+	var refs []vpnGeoReference
 	for _, rule := range cfg.Rules {
 		if rule.Enabled != nil && !*rule.Enabled {
 			continue
 		}
 		for _, domain := range rule.AllDomains() {
-			prefix, _, typed := strings.Cut(strings.ToLower(strings.TrimSpace(domain)), ":")
-			if _, err := geoKind(prefix); typed && err == nil && !slices.Contains(kinds, prefix) {
-				kinds = append(kinds, prefix)
+			prefix, name, typed := strings.Cut(strings.ToLower(strings.TrimSpace(domain)), ":")
+			if kind, err := geoKind(prefix); typed && err == nil {
+				refs = append(refs, vpnGeoReference{kind: kind, name: strings.TrimSpace(name)})
 			}
 		}
 	}
-	return strings.Join(kinds, "\n")
+	return refs, nil
 }
 
 func (s *geoSettings) source(kind geodata.Kind) *string {

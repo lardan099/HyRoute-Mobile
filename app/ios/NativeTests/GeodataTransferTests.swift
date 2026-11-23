@@ -4,16 +4,17 @@ import Foundation
 struct GeodataTransferTests {
   static func main() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let app = root.appendingPathComponent("app")
     let sandbox = root.appendingPathComponent("extension")
-    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let source = app.appendingPathComponent(GeodataKind.geosite.filename)
-    let destination = sandbox.appendingPathComponent(GeodataKind.geosite.filename)
     let receiver = GeodataReceiver(directory: sandbox)
+    let destination = receiver.archive
+    let inline = Data(repeating: 0x42, count: GeodataTransfer.inlineLimit)
+    let options: [String: NSObject] = ["state": "fixture" as NSString, "geoSnapshot": inline as NSData]
+    let encodedOptions = try PropertyListSerialization.data(fromPropertyList: options, format: .binary, options: 0)
+    let decodedOptions = try PropertyListSerialization.propertyList(from: encodedOptions, format: nil) as? [String: Any]
+    precondition((decodedOptions?["geoSnapshot"] as? Data) == inline)
     let first = Data(repeating: 0x34, count: GeodataTransfer.chunkSize * 2 + 1)
     let replacement = Data(repeating: 0x78, count: first.count)
-    try first.write(to: source)
     var chunks = 0
     let encoder = PropertyListEncoder()
     encoder.outputFormat = .binary
@@ -26,15 +27,14 @@ struct GeodataTransferTests {
       return reply
     }
 
-    try await GeodataTransfer.send(.geosite, from: app, exchange: exchange)
+    try await GeodataTransfer.sendSnapshot(first, token: UUID(), exchange: exchange)
     let received = try Data(contentsOf: destination)
     precondition(received == first && chunks == 3)
-    try await GeodataTransfer.send(.geosite, from: app, exchange: exchange)
+    try await GeodataTransfer.sendSnapshot(first, token: UUID(), exchange: exchange)
     precondition(chunks == 3)
 
-    try replacement.write(to: source)
     do {
-      try await GeodataTransfer.send(.geosite, from: app) { command in
+      try await GeodataTransfer.sendSnapshot(replacement, token: UUID()) { command in
         var damaged = command
         if var chunk = command.chunk, !chunk.isEmpty {
           chunk[0] ^= 0x1
@@ -48,12 +48,9 @@ struct GeodataTransferTests {
     precondition(unchanged == first)
     precondition(!FileManager.default.fileExists(atPath: sandbox.appendingPathComponent(".incoming").path))
 
-    try await GeodataTransfer.send(.geosite, from: app, exchange: exchange)
+    try await GeodataTransfer.sendSnapshot(replacement, token: UUID(), exchange: exchange)
     let updated = try Data(contentsOf: destination)
     precondition(updated == replacement)
-    try FileManager.default.removeItem(at: source)
-    try await GeodataTransfer.send(.geosite, from: app, exchange: exchange)
-    precondition(!FileManager.default.fileExists(atPath: destination.path))
     print("Geodata transfer tests passed")
   }
 }

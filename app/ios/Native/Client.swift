@@ -38,6 +38,14 @@ actor NativeCore {
     return try VPNStorage.prepareGeodata(legacy: legacy)
   }
 
+  func geodataSnapshot(for state: String) throws -> Data {
+    guard !HyRouteVPNGeodataKinds(state).isEmpty else { return Data() }
+    guard let data = HyRouteVPNGeodataSnapshot(state, try geodataDirectory().path), !data.isEmpty else {
+      throw CoreError.invalidResult
+    }
+    return data
+  }
+
   func vpnState() throws -> String { try store.read() }
 
   func prepareRecovery() throws {
@@ -282,27 +290,63 @@ final class Client: ObservableObject {
     }
     guard let updatedSession = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
     guard !activeStatuses.contains(updatedSession.status) else { return }
-    try await synchronizeGeodata(snapshot, with: updatedSession)
-    try updatedSession.startTunnel(options: ["state": snapshot as NSString])
+    try await startManualTunnel(snapshot, with: updatedSession)
   }
 
-  private func synchronizeGeodata(_ snapshot: String, with session: NETunnelProviderSession) async throws {
-    let kinds = HyRouteVPNGeodataKinds(snapshot).split(separator: "\n").compactMap {
-      GeodataKind(rawValue: String($0))
+  private func startManualTunnel(_ snapshot: String, with session: NETunnelProviderSession) async throws {
+    let geodata: Data
+    do { geodata = try await core.geodataSnapshot(for: snapshot) }
+    catch {
+      await logVPNError(error, event: "vpn_geo_bundle_error")
+      throw ClientMessage(text: "Не удалось подготовить категории GeoSite/GeoIP. Проверьте базы в настройках правил.")
     }
-    guard !kinds.isEmpty else { return }
-    await core.record("vpn_geo_transfer")
+    var options: [String: NSObject] = ["state": snapshot as NSString]
+    if geodata.isEmpty {
+      try session.startTunnel(options: options)
+      return
+    }
+    if geodata.count <= GeodataTransfer.inlineLimit {
+      options["geoSnapshot"] = geodata as NSData
+      await core.record("vpn_geo_inline")
+      do {
+        try session.startTunnel(options: options)
+        return
+      } catch let error as NEVPNError where error.code == .configurationStale {
+        throw error
+      } catch {
+        await logVPNError(error, event: "vpn_geo_inline_rejected")
+        options.removeValue(forKey: "geoSnapshot")
+      }
+    }
+
+    let token = UUID()
+    options["geoTransferToken"] = token.uuidString as NSString
+    try session.startTunnel(options: options)
+    await core.record("vpn_geo_transfer_after_start")
     do {
-      let directory = try await core.geodataDirectory()
-      for kind in kinds {
-        try await GeodataTransfer.send(kind, from: directory) { command in
-          try await self.sendGeodataCommand(command, to: session)
-        }
+      try await waitForGeodataReceiver(token, session: session)
+      try await GeodataTransfer.sendSnapshot(geodata, token: token) { command in
+        try await self.sendGeodataCommand(command, to: session)
       }
     } catch {
-      await core.record("vpn_geo_transfer_error")
-      throw ClientMessage(text: "Не удалось передать базы правил VPN-расширению. Повторите подключение.")
+      await logVPNError(error, event: "vpn_geo_transfer_error")
+      session.stopTunnel()
+      throw ClientMessage(text: "Не удалось передать большой набор категорий запущенному VPN-расширению. Подробности в журнале.")
     }
+  }
+
+  private func waitForGeodataReceiver(_ token: UUID, session: NETunnelProviderSession) async throws {
+    let check = GeodataTransfer(action: .awaitingSnapshot, token: token)
+    var lastError: Error = CoreError.invalidResult
+    for _ in 0..<25 {
+      do {
+        if try await sendGeodataCommand(check, to: session) == .ready { return }
+      } catch {
+        lastError = error
+      }
+      try await Task.sleep(for: .milliseconds(200))
+    }
+    throw lastError
   }
 
   private func sendGeodataCommand(_ command: GeodataTransfer, to session: NETunnelProviderSession) async throws -> GeodataTransfer.Reply {
