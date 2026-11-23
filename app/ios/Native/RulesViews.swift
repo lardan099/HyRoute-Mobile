@@ -165,10 +165,6 @@ struct RulesPage: View {
 
   private var settings: some View {
     List {
-      Section {
-        ruleTools
-          .listRowBackground(HyStyle.surface)
-      }
       Section("Маршрутизация") {
         Menu {
           ForEach(RouteAction.allCases) { action in
