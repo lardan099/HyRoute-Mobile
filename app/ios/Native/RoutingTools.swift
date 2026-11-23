@@ -14,6 +14,7 @@ struct ServerGroupsPage: View {
     List {
       Button { adding = true } label: { Label("Создать группу", systemImage: "plus") }
         .disabled(servers.isEmpty)
+        .accessibilityIdentifier("create-server-group")
       if servers.isEmpty { Text("Добавьте хотя бы один сервер.").foregroundStyle(HyStyle.muted) }
       ForEach(client.state.serverGroups ?? []) { group in
         NavigationLink {
@@ -22,6 +23,7 @@ struct ServerGroupsPage: View {
           let reserve = group.reserve.isEmpty ? "без резерва" : "с резервом"
           HyRow(title: group.name, symbol: "server.rack", detail: "Основных: \(group.primary.count) · \(reserve)")
         }
+        .accessibilityIdentifier("server-group-list-\(group.id)")
       }
     }
     .hyList()
@@ -57,6 +59,7 @@ private struct ServerGroupEditor: View {
   var body: some View {
     Form {
       TextField("Название группы", text: $name)
+        .accessibilityIdentifier("server-group-name")
       Section {
         ForEach(servers.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }) { server in
           Toggle(server.title, isOn: Binding(get: { primary.contains(server.id) }, set: { enabled in
@@ -94,6 +97,7 @@ private struct ServerGroupEditor: View {
           Task { await save(ServerGroup(name: name, primary: selected, reserve: reserve)) }
         }
         .disabled(client.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || primary.isEmpty)
+        .accessibilityIdentifier("server-group-save")
       }
     }
     .confirmationDialog("Удалить группу?", isPresented: $confirmingDelete, titleVisibility: .visible) {

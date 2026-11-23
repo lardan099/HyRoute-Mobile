@@ -106,16 +106,22 @@ final class SubscriptionAndRulesTests: XCTestCase {
   func testCreatesGroupWithOnePrimaryAndNoReserve() {
     let app = launch(screen: "routes-test")
     tap(app.buttons["tab-subscriptions"])
-    tap(app.buttons["Управление группами"].firstMatch)
-    tap(app.buttons["Создать группу"])
-    let name = app.textFields["Название группы"]
+    tap(app.buttons["manage-server-groups"])
+    tap(app.buttons["create-server-group"])
+    let name = app.textFields["server-group-name"]
     tap(name)
     name.typeText("Work")
-    tap(app.switches["group-server-demo-node"])
-    tap(app.buttons["Сохранить"])
-    let group = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Work")).firstMatch
-    XCTAssertTrue(group.waitForExistence(timeout: 10))
-    XCTAssertTrue(group.label.contains("без резерва"))
+    let primary = app.descendants(matching: .any)["group-server-demo-node"].firstMatch
+    XCTAssertTrue(primary.waitForExistence(timeout: 10), "Primary server is missing")
+    primary.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+    let save = app.buttons["server-group-save"]
+    let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
+    XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 10), .completed, "Adding only a primary must enable saving")
+    tap(save)
+    let group = app.descendants(matching: .any)
+      .matching(NSPredicate(format: "identifier BEGINSWITH %@", "server-group-list-")).firstMatch
+    XCTAssertTrue(group.waitForExistence(timeout: 10), "The saved group is absent")
+    XCTAssertTrue(group.label.contains("Work"))
   }
 
   func testChecksSavedRouteAndShowsSubscriptionTraffic() {

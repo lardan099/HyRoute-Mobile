@@ -217,11 +217,13 @@ jobs:
           output="$RUNNER_TEMP/hyroute-iphonesimulator"
           xcrun simctl bootstatus "$device" -b
           xcrun simctl ui "$device" appearance dark
+          status=0
           xcodebuild -project HyRoute.xcodeproj -scheme HyRoute -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$output" -resultBundlePath "$RUNNER_TEMP/hyroute-ui.xcresult" \
-            CODE_SIGN_IDENTITY=- -quiet test
+            CODE_SIGN_IDENTITY=- -quiet test || status=$?
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/hyroute-ui.xcresult"
+          if [[ "$status" -ne 0 ]]; then exit "$status"; fi
           bundle="$output/Build/Products/Debug-iphonesimulator/HyRoute.app"
           xcrun simctl install "$device" "$bundle"
           for screen in home servers rules routing chains; do

@@ -460,6 +460,7 @@ private struct SubscriptionsPage: View {
             .hyCard(padding: 12)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("manage-server-groups")
       }
       .padding(16)
     }
