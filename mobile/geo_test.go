@@ -10,6 +10,21 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
+func TestVPNGeodataKinds(t *testing.T) {
+	state := `{"settings":{"routing":{"rules":[
+		{"domain":{"pattern":"GEOSITE:youtube"},"action":"tunnel"},
+		{"domains":["geoip:telegram","geosite:telegram"],"action":"direct"},
+		{"domains":["geoip:ru"],"action":"block","enabled":false},
+		{"domains":["example.org"],"action":"direct"}]}}}`
+	if got := VPNGeodataKinds(state); got != "geosite\ngeoip" {
+		t.Fatalf("active geodata kinds = %q", got)
+	}
+	onlyDisabled := `{"settings":{"routing":{"rules":[{"domains":["geosite:youtube"],"action":"direct","enabled":false}]}}}`
+	if got := VPNGeodataKinds(onlyDisabled); got != "" {
+		t.Fatalf("disabled rule requested geodata: %q", got)
+	}
+}
+
 func TestCustomGeoFilesAreValidatedAndPinned(t *testing.T) {
 	db := t.TempDir()
 	input := t.TempDir()

@@ -132,6 +132,10 @@ NSString *HyRouteUnavailableGeo(NSString *state) {
     return [MobileInspectIOSVPNPlan(state) geoCategories];
 }
 
+NSString *HyRouteVPNGeodataKinds(NSString *state) {
+    return MobileVPNGeodataKinds(state);
+}
+
 NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSString * _Nullable * _Nonnull issue) {
     MobileConfigureGeo(geoDirectory);
     MobileIOSVPNPlanResult *result = MobileInspectIOSVPNPlan(state);

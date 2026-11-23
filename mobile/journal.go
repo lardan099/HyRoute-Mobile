@@ -49,6 +49,8 @@ var journalMessages = map[string]string{
 	"vpn_geo_error":              "Расширению недоступна база или категория GeoSite/GeoIP",
 	"vpn_geo_local_error":        "Правила используют отсутствующие категории GeoSite/GeoIP",
 	"vpn_geo_shared_error":       "Расширению недоступно общее хранилище GeoSite/GeoIP",
+	"vpn_geo_transfer":           "Подготовка геобаз в хранилище VPN-расширения",
+	"vpn_geo_transfer_error":     "Не удалось передать геобазы VPN-расширению",
 	"vpn_reference_missing":      "Правило или цепочка ссылается на профиль, отсутствующий в подписке",
 	"vpn_profile_unsupported":    "В профиле VPN указаны неподдерживаемые параметры",
 	"probe_start":                "Начата проверка задержки",

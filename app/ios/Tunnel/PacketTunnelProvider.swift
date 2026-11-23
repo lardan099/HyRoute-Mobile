@@ -9,13 +9,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private var probe: NSObject?
   private var probeToken: UUID?
   private var generation = 0
+  private lazy var geodataReceiver: GeodataReceiver? = {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first.map {
+      GeodataReceiver(directory: $0.appendingPathComponent("hyroute-tunnel-geo", isDirectory: true))
+    }
+  }()
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
     worker.async {
       self.generation += 1
       let generation = self.generation
-      let sharedGeodata = VPNStorage.sharedGeodata
-      let geodata = sharedGeodata ?? FileManager.default.temporaryDirectory
+      let usePrivateGeodata = options?["privateGeodata"] as? Bool == true
+      let source = usePrivateGeodata ? self.geodataReceiver?.directory : VPNStorage.sharedGeodata
+      let geodata = source ?? FileManager.default.temporaryDirectory
         .appendingPathComponent("hyroute-geo-unavailable", isDirectory: true)
       let journal = VPNStorage.tunnelJournal
       HyRouteRecordVPNEvent(journal, "vpn_provider_start")
@@ -31,7 +37,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       var issue: NSString?
       guard let plan = HyRoutePlanVPN(state, geodata.path, &issue) else {
         let failure = TunnelStartError.planFailure(issue as String?,
-          sharedGeodataAvailable: sharedGeodata != nil && FileManager.default.isReadableFile(atPath: geodata.path))
+          sharedGeodataAvailable: usePrivateGeodata || (source != nil && FileManager.default.isReadableFile(atPath: geodata.path)))
         HyRouteRecordVPNEvent(journal, failure.journalEvent)
         completionHandler(failure)
         return
@@ -90,6 +96,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   override func handleAppMessage(_ data: Data, completionHandler: ((Data?) -> Void)?) {
     worker.async {
+      if data.count <= 64 * 1024, let transfer = try? PropertyListDecoder().decode(GeodataTransfer.self, from: data) {
+        let reply = self.session == nil ? self.geodataReceiver?.receive(transfer) : nil
+        completionHandler?(reply?.data)
+        return
+      }
       guard let command = try? JSONDecoder().decode(ProbeCommand.self, from: data) else {
         completionHandler?(nil)
         return

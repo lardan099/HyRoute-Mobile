@@ -97,6 +97,31 @@ func geoKind(kind string) (geodata.Kind, error) {
 	}
 }
 
+// VPNGeodataKinds lists the databases referenced by active VPN rules.
+func VPNGeodataKinds(raw string) string {
+	state, err := decodeClientState(raw)
+	if err != nil || len(state.Settings.Routing) == 0 {
+		return ""
+	}
+	var cfg routingConfig
+	if err := json.Unmarshal(state.Settings.Routing, &cfg); err != nil {
+		return ""
+	}
+	var kinds []string
+	for _, rule := range cfg.Rules {
+		if rule.Enabled != nil && !*rule.Enabled {
+			continue
+		}
+		for _, domain := range rule.AllDomains() {
+			prefix, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(domain)), ":")
+			if _, err := geoKind(prefix); err == nil && !slices.Contains(kinds, prefix) {
+				kinds = append(kinds, prefix)
+			}
+		}
+	}
+	return strings.Join(kinds, "\n")
+}
+
 func (s *geoSettings) source(kind geodata.Kind) *string {
 	if kind == geodata.IP {
 		return &s.IP

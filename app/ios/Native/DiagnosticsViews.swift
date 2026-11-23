@@ -84,9 +84,15 @@ final class ProbeHandle {
 
   private func send(_ command: ProbeCommand, to session: NETunnelProviderSession) async throws -> Data {
     let message = try JSONEncoder().encode(command)
+    return try await session.hyRouteMessage(message)
+  }
+}
+
+extension NETunnelProviderSession {
+  func hyRouteMessage(_ message: Data) async throws -> Data {
     return try await withCheckedThrowingContinuation { continuation in
       do {
-        try session.sendProviderMessage(message) { response in
+        try sendProviderMessage(message) { response in
           if let response { continuation.resume(returning: response) }
           else { continuation.resume(throwing: ProbeError.unavailable) }
         }

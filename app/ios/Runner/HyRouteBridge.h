@@ -25,6 +25,7 @@ BOOL HyRouteSetGeoSource(NSString *kind, NSString *address);
 BOOL HyRouteImportGeoFile(NSString *kind, NSString *path);
 BOOL HyRouteImportGeoFileForState(NSString *kind, NSString *path, NSString *state);
 NSString *HyRouteUnavailableGeo(NSString *state);
+NSString *HyRouteVPNGeodataKinds(NSString *state);
 NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSString * _Nullable * _Nonnull issue);
 NSObject * _Nullable HyRoutePrepareVPN(NSObject *plan);
 NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd);
