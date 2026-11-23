@@ -288,6 +288,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           ? 'Подписку не удалось сохранить. Проверьте хранилище устройства.'
           : refresh
           ? 'Подписку не удалось обновить. Сохранён предыдущий список.'
+          : error.code == 'subscription' && error.message != null
+          ? error.message!
           : 'Импорт не удался. Проверьте ссылку или формат подписки.';
     } on FormatException {
       return 'В подписке не нашлось серверов.';

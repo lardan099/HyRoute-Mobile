@@ -414,6 +414,7 @@ struct ProfilePicker: View {
           }
           .buttonStyle(.plain)
           .disabled(client.busy)
+          .accessibilityIdentifier("picker-profile-\(profile.id)")
         }
       }
       .hyList()
@@ -680,8 +681,14 @@ private struct ImportSheet: View {
           Button {
             Task {
               error = nil
-              if await client.importSubscription(input, reportError: false) { dismiss() }
-              else { error = "Не удалось импортировать. Проверьте ссылку или формат конфига." }
+              do {
+                try await client.importSubscription(input)
+                dismiss()
+              } catch let failure as LocalizedError {
+                self.error = failure.errorDescription ?? "Не удалось импортировать подписку."
+              } catch {
+                self.error = "Не удалось сохранить подписку."
+              }
             }
           } label: {
             if client.busy { ProgressView().tint(.white) }

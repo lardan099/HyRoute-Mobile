@@ -264,7 +264,7 @@ class Server {
       name: name.isNotEmpty ? name : host,
       host: host,
       protocol: switch ((json['protocol'], json['balance'])) {
-        ('group', _) => 'Группа с резервом',
+        ('group', _) => 'Группа серверов',
         ('vless', true) => 'VLESS · ${json['balanceStrategy'] ?? 'leastLoad'}',
         ('vless', _) => 'VLESS',
         _ => 'Hysteria 2',

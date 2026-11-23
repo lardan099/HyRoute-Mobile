@@ -42,16 +42,19 @@ class _ServerGroupsPageState extends State<ServerGroupsPage> {
       padding: const EdgeInsets.all(16),
       children: [
         FilledButton.icon(
-          onPressed: widget.servers.length < 2 ? null : () => _edit(null),
+          onPressed: widget.servers.isEmpty ? null : () => _edit(null),
           icon: const Icon(Icons.add),
           label: const Text('Создать группу'),
         ),
-        if (widget.servers.length < 2)
-          const ListTile(title: Text('Добавьте два отдельных сервера.')),
+        if (widget.servers.isEmpty)
+          const ListTile(title: Text('Добавьте хотя бы один сервер.')),
         for (final group in _groups)
           ListTile(
             title: Text(group.name),
-            subtitle: Text('Основных: ${group.primary.length} · резервный: 1'),
+            subtitle: Text(
+              'Основных: ${group.primary.length} · '
+              '${group.reserve.isEmpty ? 'без резерва' : 'с резервом'}',
+            ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _edit(group),
           ),
@@ -79,10 +82,10 @@ class _ServerGroupEditorState extends State<_ServerGroupEditor> {
   late final _name = TextEditingController(text: widget.group?.name);
   late final _primary = {...?widget.group?.primary}
     ..removeWhere((id) => !widget.servers.any((server) => server.id == id));
-  late String? _reserve =
+  late String _reserve =
       widget.servers.any((server) => server.id == widget.group?.reserve)
-      ? widget.group?.reserve
-      : null;
+      ? widget.group!.reserve
+      : '';
   var _busy = false;
   String? _error;
 
@@ -152,6 +155,7 @@ class _ServerGroupEditorState extends State<_ServerGroupEditor> {
           isExpanded: true,
           decoration: const InputDecoration(labelText: 'Резервный сервер'),
           items: [
+            const DropdownMenuItem(value: '', child: Text('Без резерва')),
             for (final server in widget.servers)
               if (!_primary.contains(server.id))
                 DropdownMenuItem(
@@ -159,15 +163,17 @@ class _ServerGroupEditorState extends State<_ServerGroupEditor> {
                   child: Text(server.name, overflow: TextOverflow.ellipsis),
                 ),
           ],
-          onChanged: _busy ? null : (value) => setState(() => _reserve = value),
+          onChanged: _busy
+              ? null
+              : (value) => setState(() => _reserve = value ?? ''),
         ),
         if (_error case final message?) ListTile(title: Text(message)),
         const SizedBox(height: 16),
         FilledButton(
-          onPressed: _busy || _reserve == null || _primary.isEmpty
+          onPressed: _busy || _primary.isEmpty
               ? null
               : () => _save(
-                  ServerGroup('', _name.text, _primary.toList(), _reserve!),
+                  ServerGroup('', _name.text, _primary.toList(), _reserve),
                 ),
           child: const Text('Сохранить'),
         ),

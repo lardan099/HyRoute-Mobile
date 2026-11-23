@@ -120,7 +120,7 @@ struct VPNProfile: Decodable, Identifiable {
   }
 
   var transport: String {
-    if `protocol` == "group" { return "Группа с резервом" }
+    if `protocol` == "group" { return "Группа серверов" }
     if balance == true { return "VLESS · \(balanceStrategy ?? "leastLoad")" }
     return `protocol` == "vless" ? "VLESS" : "Hysteria 2"
   }

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,28 +54,33 @@ func fetchSubscriptionContext(ctx context.Context, client *http.Client, rawURL s
 	if err != nil || request.URL.Hostname() == "" || request.URL.Scheme != "https" {
 		return "", errors.New("нужна ссылка подписки https://")
 	}
-	request.Header.Set("Accept", "text/plain, application/json, */*")
+	request.Header.Set("Accept", "text/plain, */*")
+	device := currentSubscriptionDevice.Load()
+	device.setHeaders(request)
 	body, headers, err := requestSubscription(client, request)
 	if err != nil {
 		return "", err
 	}
-	primary, err := importSubscription(body, subscription.ReadPanelHeaders(headers).Clean())
-	if err != nil {
-		return "", err
-	}
-	if subscription.HasVLESSLinks(body) {
+	primary, primaryErr := importSubscription(body, subscription.ReadPanelHeaders(headers).Clean())
+	if primaryErr != nil || subscription.HasVLESSLinks(body) {
 		ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
 		defer cancel()
 		alternate := request.Clone(ctx)
-		alternate.Header.Set("User-Agent", "Happ/HyRoute")
+		alternate.Header.Set("User-Agent", "Happ/HyRoute "+device.userAgent())
 		alternate.Header.Set("Accept", "application/json, */*")
-		if altBody, _, err := requestSubscription(client, alternate); err == nil {
+		if altBody, altHeaders, err := requestSubscription(client, alternate); err == nil {
+			if primaryErr != nil {
+				if recovered, err := importSubscription(altBody, subscription.ReadPanelHeaders(altHeaders).Clean()); err == nil {
+					return recovered, nil
+				}
+				return "", primaryErr
+			}
 			if alt, err := subscription.Parse(altBody); err == nil {
 				return appendPanelBalances(primary, alt.Profiles)
 			}
 		}
 	}
-	return primary, nil
+	return primary, primaryErr
 }
 
 func appendPanelBalances(primary string, alternate []hysteria.Profile) (string, error) {
@@ -132,10 +138,39 @@ func subscriptionRedirect(request *http.Request, via []*http.Request) error {
 	// Subscription URLs often carry an access token in the path or query.
 	request.Header.Del("Referer")
 	if !strings.EqualFold(request.URL.Host, via[0].URL.Host) {
-		request.Header.Del("Authorization")
-		request.Header.Del("User-Agent")
+		for _, key := range []string{"Authorization", "User-Agent", "X-Hwid", "X-Device-Os", "X-Ver-Os", "X-Device-Model"} {
+			request.Header.Del(key)
+		}
 	}
 	return nil
+}
+
+// SubscriptionImportMessage exposes diagnostics without any raw URLs,
+// credentials, or text supplied by the subscription provider.
+func SubscriptionImportMessage(raw string) string {
+	if code, ok := strings.CutPrefix(raw, "сервер подписки ответил HTTP "); ok {
+		if n, err := strconv.Atoi(code); err == nil && n >= 100 && n <= 599 {
+			return fmt.Sprintf("Сервер подписки ответил HTTP %d.", n)
+		}
+	}
+	switch {
+	case strings.HasPrefix(raw, "сервер подписки недоступен"):
+		return "Сервер подписки недоступен. Проверьте интернет и попробуйте ещё раз."
+	case strings.HasPrefix(raw, "сервер вернул веб-страницу"):
+		return "Ссылка открывает веб-страницу. Вставьте прямую ссылку на подписку или сам конфиг."
+	case strings.HasPrefix(raw, "панель прислала вместо серверов"):
+		return "Провайдер вернул сообщение вместо серверов. Проверьте подписку в личном кабинете."
+	case strings.HasPrefix(raw, "ответ подписки больше"):
+		return "Ответ подписки больше 5 МБ."
+	case strings.HasPrefix(raw, "ответ подписки оборван"):
+		return "Загрузка подписки прервалась."
+	case strings.HasPrefix(raw, "нужна ссылка подписки https://"):
+		return "Вставьте защищённую HTTPS-ссылку на подписку."
+	case strings.HasPrefix(raw, "пропущено серверов"):
+		return "В подписке нет серверов с проверкой подлинности TLS."
+	default:
+		return "В подписке не найдено поддерживаемых серверов Hysteria 2 или VLESS."
+	}
 }
 
 // ImportSubscription reads a downloaded subscription or pasted share links.

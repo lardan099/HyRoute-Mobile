@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hyroute_mobile/core.dart';
 import 'package:hyroute_mobile/main.dart';
+import 'package:hyroute_mobile/network_tools.dart';
 
 class _TestCore implements ClientCore {
   String? configuration;
@@ -212,6 +213,34 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('saves a server group without a reserve', (tester) async {
+    ServerGroup? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ServerGroupsPage(
+          groups: const [],
+          servers: const [
+            Server(id: 'first', name: 'Основной', protocol: 'VLESS'),
+          ],
+          save: (_, group) async {
+            saved = group;
+            return [?group];
+          },
+        ),
+      ),
+    );
+    await tester.tap(find.text('Создать группу'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Моя группа');
+    await tester.tap(find.text('Основной'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Сохранить'));
+    await tester.tap(find.text('Сохранить'));
+    await tester.pumpAndSettle();
+    expect(saved?.primary, ['first']);
+    expect(saved?.reserve, isEmpty);
+    expect(find.text('Моя группа'), findsOneWidget);
+  });
   test('formats VPN journal timestamps with the device clock', () {
     final at = DateTime(2026, 11, 23, 1, 25, 34).millisecondsSinceEpoch;
     final result = formatVpnJournal(

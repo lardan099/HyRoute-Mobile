@@ -24,6 +24,9 @@ type serverGroup struct {
 }
 
 func (g serverGroup) memberIDs() []string {
+	if g.Reserve == "" {
+		return g.Primary
+	}
 	return append(slices.Clone(g.Primary), g.Reserve)
 }
 
@@ -109,8 +112,8 @@ func ChangeServerGroup(raw, id, definition string) (string, error) {
 		if group.Name == "" || utf8.RuneCountInString(group.Name) > 80 {
 			return "", errors.New("введите название группы до 80 символов")
 		}
-		if len(group.Primary) < 1 || len(group.Primary) > 16 || group.Reserve == "" {
-			return "", errors.New("выберите от 1 до 16 основных серверов и один резервный")
+		if len(group.Primary) < 1 || len(group.Primary) > 16 {
+			return "", errors.New("выберите от 1 до 16 основных серверов")
 		}
 		servers, _ := state.groupCandidates()
 		seen := make(map[string]bool)

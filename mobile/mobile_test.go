@@ -294,6 +294,76 @@ func TestFetchSubscription(t *testing.T) {
 	}
 }
 
+func TestSubscriptionImportSupportsDeviceLimitedPanelsAndJSONFallback(t *testing.T) {
+	ConfigureSubscriptionDevice("0.3.16", "fixture-install-seed", "iOS", "26.0")
+	t.Cleanup(func() { currentSubscriptionDevice.Store(nil) })
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Hwid")
+		if len(id) != 32 || r.Header.Get("X-Device-Os") != "iOS" || r.Header.Get("X-Ver-Os") != "26.0" ||
+			!strings.Contains(r.UserAgent(), "HyRoute/0.3.16") {
+			io.WriteString(w, "vless://fixture@0.0.0.0:1#Unsupported%20application")
+			return
+		}
+		if calls.Add(1)%2 == 1 {
+			w.Header().Set("Content-Type", "text/html")
+			io.WriteString(w, "<html><body>Subscription landing page</body></html>")
+			return
+		}
+		if !strings.HasPrefix(r.UserAgent(), "Happ/") {
+			t.Error("alternate request did not ask for Xray JSON")
+		}
+		io.WriteString(w, testXrayBalance)
+	}))
+	defer server.Close()
+	for range 2 {
+		raw, err := fetchSubscription(server.Client(), server.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result importedSubscription
+		if err := json.Unmarshal([]byte(raw), &result); err != nil || len(result.Servers) != 1 || result.Servers[0].Balance == nil {
+			t.Fatalf("alternate did not import the Xray balance: %v", err)
+		}
+	}
+	if calls.Load() != 4 {
+		t.Fatalf("invalid device headers or request count: %d", calls.Load())
+	}
+
+	device := currentSubscriptionDevice.Load()
+	first, _ := http.NewRequest(http.MethodGet, "https://first.example/account-one", nil)
+	same, _ := http.NewRequest(http.MethodGet, "https://first.example/account-two", nil)
+	other, _ := http.NewRequest(http.MethodGet, "https://other.example/account", nil)
+	for _, request := range []*http.Request{first, same, other} {
+		device.setHeaders(request)
+	}
+	if first.Header.Get("X-Hwid") != same.Header.Get("X-Hwid") ||
+		first.Header.Get("X-Hwid") == other.Header.Get("X-Hwid") {
+		t.Fatal("device identification must be stable per host and distinct across hosts")
+	}
+	other.Header.Set("Referer", first.URL.String())
+	if err := subscriptionRedirect(other, []*http.Request{first}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"X-Hwid", "X-Device-Os", "X-Ver-Os", "Referer"} {
+		if other.Header.Get(key) != "" {
+			t.Errorf("forwarded %s across origins", key)
+		}
+	}
+}
+
+func TestSubscriptionDiagnosticsOmitProviderTextAndTokens(t *testing.T) {
+	if got := SubscriptionImportMessage("сервер подписки ответил HTTP 403"); !strings.Contains(got, "403") {
+		t.Fatal("expected a status-specific diagnostic")
+	}
+	const secret = "https://example.test/test-token"
+	for _, raw := range []string{"панель прислала вместо серверов сообщение: " + secret, "unexpected " + secret} {
+		if got := SubscriptionImportMessage(raw); strings.Contains(got, secret) || strings.Contains(got, "test-token") {
+			t.Fatal("import diagnostics included a subscription token")
+		}
+	}
+}
+
 func TestRejectUnencryptedSubscription(t *testing.T) {
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("sent a subscription request over HTTP")

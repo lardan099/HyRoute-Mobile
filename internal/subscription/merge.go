@@ -106,8 +106,9 @@ func Merge(list []hysteria.Profile, source string, fresh []hysteria.Profile, kee
 		byKey := map[string][]int{}
 		for j, o := range old {
 			if !used[j] {
-				k := key(o)
-				byKey[k] = append(byKey[k], j)
+				if k := key(o); k != "" {
+					byKey[k] = append(byKey[k], j)
+				}
 			}
 		}
 		for i, f := range fresh {

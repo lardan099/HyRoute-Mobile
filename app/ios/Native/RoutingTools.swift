@@ -13,13 +13,14 @@ struct ServerGroupsPage: View {
   var body: some View {
     List {
       Button { adding = true } label: { Label("Создать группу", systemImage: "plus") }
-        .disabled(servers.count < 2)
-      if servers.count < 2 { Text("Добавьте два отдельных сервера.").foregroundStyle(HyStyle.muted) }
+        .disabled(servers.isEmpty)
+      if servers.isEmpty { Text("Добавьте хотя бы один сервер.").foregroundStyle(HyStyle.muted) }
       ForEach(client.state.serverGroups ?? []) { group in
         NavigationLink {
           ServerGroupEditor(client: client, servers: servers, group: group)
         } label: {
-          HyRow(title: group.name, symbol: "server.rack", detail: "Основных: \(group.primary.count) · резервный: 1")
+          let reserve = group.reserve.isEmpty ? "без резерва" : "с резервом"
+          HyRow(title: group.name, symbol: "server.rack", detail: "Основных: \(group.primary.count) · \(reserve)")
         }
       }
     }
@@ -62,6 +63,7 @@ private struct ServerGroupEditor: View {
             if enabled { primary.insert(server.id) } else { primary.remove(server.id) }
           }))
           .disabled(reserve == server.id)
+          .accessibilityIdentifier("group-server-\(server.id)")
         }
       } header: {
         Text("Основные серверы")
@@ -69,7 +71,7 @@ private struct ServerGroupEditor: View {
         Text("HyRoute выбирает доступный сервер с наименьшей задержкой.")
       }
       Picker("Резервный сервер", selection: $reserve) {
-        Text("Выбрать").tag("")
+        Text("Без резерва").tag("")
         ForEach(servers.filter { !primary.contains($0.id) }) { Text($0.title).tag($0.id) }
       }
       if let error { Text(error).foregroundStyle(HyStyle.failure) }
@@ -91,7 +93,7 @@ private struct ServerGroupEditor: View {
           let selected = servers.map(\.id).filter { primary.contains($0) }
           Task { await save(ServerGroup(name: name, primary: selected, reserve: reserve)) }
         }
-        .disabled(client.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || primary.isEmpty || reserve.isEmpty)
+        .disabled(client.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || primary.isEmpty)
       }
     }
     .confirmationDialog("Удалить группу?", isPresented: $confirmingDelete, titleVisibility: .visible) {

@@ -66,12 +66,20 @@ public class MainActivity extends FlutterActivity {
                     break;
                 case "importSubscription":
                 case "refreshSubscription": {
+                    SubscriptionIdentity.configure(this);
                     synchronized (ClientStore.LOCK) {
                         String state = store.read();
-                        String updated = call.method.equals("refreshSubscription")
-                                ? Mobile.attemptClientSubscriptionRefresh(state, call.argument("id"))
-                                : Mobile.addClientSubscription(state, call.argument("input"),
-                                    Boolean.TRUE.equals(call.argument("fromUrl")));
+                        String updated;
+                        try {
+                            updated = call.method.equals("refreshSubscription")
+                                    ? Mobile.attemptClientSubscriptionRefresh(state, call.argument("id"))
+                                    : Mobile.addClientSubscription(state, call.argument("input"),
+                                        Boolean.TRUE.equals(call.argument("fromUrl")));
+                        } catch (Exception failure) {
+                            String raw = failure.getMessage();
+                            result.error("subscription", Mobile.subscriptionImportMessage(raw == null ? "" : raw), null);
+                            break;
+                        }
                         String view = Mobile.clientStateView(updated);
                         store.write(updated);
                         result.success(view);

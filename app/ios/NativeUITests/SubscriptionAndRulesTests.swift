@@ -99,8 +99,23 @@ final class SubscriptionAndRulesTests: XCTestCase {
     tap(app.buttons["Отмена"])
     tap(app.buttons["tab-home"])
     tap(app.buttons["profilePicker"])
-    XCTAssertTrue(app.staticTexts["Тестовый сервер"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.staticTexts["Запасной сервер"].exists)
+    XCTAssertTrue(app.buttons["picker-profile-demo-node"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["picker-profile-demo-entry"].exists)
+  }
+
+  func testCreatesGroupWithOnePrimaryAndNoReserve() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-subscriptions"])
+    tap(app.buttons["Управление группами"].firstMatch)
+    tap(app.buttons["Создать группу"])
+    let name = app.textFields["Название группы"]
+    tap(name)
+    name.typeText("Work")
+    tap(app.switches["group-server-demo-node"])
+    tap(app.buttons["Сохранить"])
+    let group = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Work")).firstMatch
+    XCTAssertTrue(group.waitForExistence(timeout: 10))
+    XCTAssertTrue(group.label.contains("без резерва"))
   }
 
   func testChecksSavedRouteAndShowsSubscriptionTraffic() {

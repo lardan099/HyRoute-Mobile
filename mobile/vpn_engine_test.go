@@ -72,6 +72,13 @@ func TestVPNRoutesThroughEmbeddedVLESSBalance(t *testing.T) {
 		t.Fatalf("recovery must omit subscription URL: %v", err)
 	}
 	assertVPNStateRoundTrip(t, recovery, endpoint.URL)
+
+	groupID := state.Settings.Selected
+	noReserve, err := ChangeServerGroup(raw, groupID, `{"name":"Group without reserve","primary":["reserve"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertVPNStateRoundTrip(t, noReserve, endpoint.URL)
 }
 
 func TestIOSVPNPlanUsesDisplayedProfileAfterSelectedServerDisappears(t *testing.T) {

@@ -16,6 +16,7 @@ private func vpnFingerprint(_ snapshot: String) -> Data? {
 actor NativeCore {
   static let shared = NativeCore()
   private let store = ClientStore()
+  private var subscriptionConfigured = false
   #if targetEnvironment(simulator)
   private var routingFixture: String?
 
@@ -37,6 +38,7 @@ actor NativeCore {
   #endif
 
   func load() throws -> ClientState {
+    configureSubscriptionDevice()
     HyRouteConfigureGeo(try geodataDirectory().path)
     return try view(store.read())
   }
@@ -100,7 +102,23 @@ actor NativeCore {
     let url = URLComponents(string: input)
     let fromURL = url?.scheme?.lowercased() == "https" &&
       !(url?.host?.isEmpty ?? true) && input.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
-    return try persist(HyRouteAddSubscription(try store.read(), input, fromURL))
+    var issue: NSString?
+    let updated = HyRouteAddSubscriptionWithIssue(try store.read(), input, fromURL, &issue)
+    guard let updated else {
+      throw ClientMessage(text: (issue as String?) ?? "Не удалось импортировать подписку.")
+    }
+    return try persist(updated)
+  }
+
+  private func configureSubscriptionDevice() {
+    guard !subscriptionConfigured else { return }
+    let prefs = UserDefaults.standard
+    let seed = prefs.string(forKey: "subscriptionDeviceSeed") ?? UUID().uuidString
+    prefs.set(seed, forKey: "subscriptionDeviceSeed")
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    let os = ProcessInfo.processInfo.operatingSystemVersion
+    HyRouteConfigureSubscriptionDevice(version, seed, "iOS", "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+    subscriptionConfigured = true
   }
 
   func refresh(_ id: String) throws -> ClientState {
@@ -153,9 +171,15 @@ actor NativeCore {
   func changeServerGroup(id: String, group: ServerGroup?) throws -> ClientState {
     let definition = try group.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) } ?? ""
     var issue: NSString?
-    guard let result = HyRouteChangeServerGroup(try store.read(), id, definition, &issue) else {
+    guard let result = HyRouteChangeServerGroup(try routingState(), id, definition, &issue) else {
       throw ClientMessage(text: (issue as String?) ?? "Не удалось сохранить группу.")
     }
+    #if targetEnvironment(simulator)
+    if routingFixture != nil {
+      routingFixture = result
+      return try view(result)
+    }
+    #endif
     return try persist(result)
   }
 
@@ -750,10 +774,12 @@ final class Client: ObservableObject, VPNCommandTarget {
     return newManager
   }
 
-  func importSubscription(_ input: String, reportError: Bool = true) async -> Bool {
-    await change("Не удалось импортировать подписку. Проверьте ссылку или формат.", reportError: reportError) {
-      try await self.core.importSubscription(input.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
+  func importSubscription(_ input: String) async throws {
+    guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
+    busy = true
+    defer { busy = false }
+    let updated = try await core.importSubscription(input.trimmingCharacters(in: .whitespacesAndNewlines))
+    await applySettingsChange(updated)
   }
 
   func refresh(_ id: String) async {

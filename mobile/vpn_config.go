@@ -353,7 +353,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 
 func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve func(string) netip.Addr, labels map[string]string) ([]any, map[string]any, error) {
 	var outbounds []any
-	fallback := blockTag
+	var fallback string
 	for i, member := range target.group {
 		ip := resolve(member.profile.Host)
 		if !ip.IsValid() {
@@ -379,6 +379,8 @@ func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve 
 		if member.reserve {
 			fallback = memberTag
 			labels[memberTag] += " (резерв)"
+		} else if fallback == "" {
+			fallback = memberTag
 		}
 	}
 	if len(outbounds) == 0 {

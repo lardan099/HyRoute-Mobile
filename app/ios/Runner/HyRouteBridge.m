@@ -14,9 +14,19 @@ NSString * _Nullable HyRouteStateView(NSString *state) {
 }
 
 NSString * _Nullable HyRouteAddSubscription(NSString *state, NSString *input, BOOL fromURL) {
+    NSString *issue = nil;
+    return HyRouteAddSubscriptionWithIssue(state, input, fromURL, &issue);
+}
+
+NSString * _Nullable HyRouteAddSubscriptionWithIssue(NSString *state, NSString *input, BOOL fromURL, NSString * _Nullable * _Nonnull issue) {
     NSError *error = nil;
     NSString *updated = MobileAddClientSubscription(state, input, fromURL, &error);
+    *issue = error == nil ? nil : MobileSubscriptionImportMessage(error.localizedDescription);
     return error == nil ? updated : nil;
+}
+
+void HyRouteConfigureSubscriptionDevice(NSString *version, NSString *seed, NSString *os, NSString *osVersion) {
+    MobileConfigureSubscriptionDevice(version, seed, os, osVersion);
 }
 
 NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings) {

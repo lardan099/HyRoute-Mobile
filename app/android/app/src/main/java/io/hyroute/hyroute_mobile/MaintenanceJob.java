@@ -46,6 +46,7 @@ public final class MaintenanceJob extends JobService {
     }
 
     private static String refreshSubscriptions(Context context, Maintenance task) throws Exception {
+        SubscriptionIdentity.configure(context);
         synchronized (SUBSCRIPTIONS) {
             ClientStore store = new ClientStore(context.getNoBackupFilesDir());
             String before = store.read();
