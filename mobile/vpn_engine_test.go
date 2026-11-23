@@ -18,7 +18,9 @@ import (
 
 	"github.com/lardan099/hyroute-mobile/internal/hysteria"
 	"github.com/lardan099/hyroute-mobile/internal/vless"
+	xctx "github.com/xtls/xray-core/common/ctx"
 	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/proxy/vless/inbound"
 )
@@ -153,6 +155,20 @@ func TestIOSChainRepairWithExistingUnavailableGeoRules(t *testing.T) {
 	}
 }
 
+func TestIOSRejectsCycleThroughGroupMember(t *testing.T) {
+	raw := `{"subscriptions":[{"snapshot":{"servers":[
+		{"id":"moscow","name":"Москва","host":"192.0.2.1","ports":"443","auth":"local"},
+		{"id":"other","name":"Запасной","host":"192.0.2.2","ports":"443","auth":"local"}]}}],
+		"settings":{"selected":"moscow"},
+		"serverGroups":[{"id":"entry","name":"Вход","primary":["moscow"],"reserve":"other"}]}`
+	settings := `{"selected":"moscow","routing":{"defaultAction":"tunnel","viaProfiles":{"moscow":"entry"}}}`
+	if _, err := SaveClientSettings(raw, settings, false); err == nil ||
+		!strings.Contains(err.Error(), "Цепочка замыкается") ||
+		!strings.Contains(err.Error(), "Москва") || !strings.Contains(err.Error(), "Вход") {
+		t.Fatalf("wanted specific cycle through a group member, got %v", err)
+	}
+}
+
 func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {
 	const auth = "local-hysteria-test"
 	response := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -182,9 +198,60 @@ func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {
 		port, auth, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}))
 	startVPNTestServer(t, serverConfig)
-	assertVPNRoundTrip(t, hysteria.Profile{ID: "hy2", Name: "Hysteria test", Host: "127.0.0.1",
+	exit := hysteria.Profile{ID: "hy2", Name: "Hysteria test", Host: "127.0.0.1",
 		Ports: fmt.Sprint(port), Auth: auth, TLS: hysteria.TLS{PinSHA256: fmt.Sprintf("%x", sha256.Sum256(cert.Certificate[0]))},
-	}, endpoint.URL)
+	}
+	t.Run("Single", func(t *testing.T) { assertVPNRoundTrip(t, exit, endpoint.URL) })
+	t.Run("ViaGroupReserve", func(t *testing.T) {
+		const credential = "00000000-0000-4000-8000-000000000002"
+		upstream, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		entryPort := upstream.Addr().(*net.TCPAddr).Port
+		_ = upstream.Close()
+		startVPNTestServer(t, fmt.Sprintf(`{"log":{"loglevel":"none","access":"none"},
+			"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"vless",
+			  "settings":{"decryption":"none","clients":[{"id":%q}]}}],
+			"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow","ip":["127.0.0.1/32"]}]}}]}`,
+			entryPort, credential))
+		state := clientState{
+			Subscriptions: []savedSubscription{{Snapshot: importedSubscription{Servers: []hysteria.Profile{
+				exit, {ID: "primary", Host: "primary.invalid", Ports: "443", Auth: "unresolved"},
+				{ID: "auto", Name: "Imported Auto", Protocol: hysteria.ProtoVLESS, Balance: &vless.Balance{
+					FallbackNode: 1, Strategy: "leastPing", Nodes: []vless.Node{{
+						Host: "127.0.0.1", Port: entryPort, Settings: vless.Settings{ID: credential},
+					}},
+				}},
+			}}}},
+			Settings: clientSettings{Selected: exit.ID},
+		}
+		candidates, ordered := state.groupCandidates()
+		if len(ordered) != 3 || candidates[ordered[2]].node == nil {
+			t.Fatalf("imported Auto node missing from group picker: %v", ordered)
+		}
+		state.ServerGroups = []serverGroup{{ID: "group", Name: "First hop", Primary: []string{"primary"}, Reserve: ordered[2]}}
+		state.Settings.Routing = json.RawMessage(`{"defaultAction":"tunnel","viaProfiles":{"hy2":"group"}}`)
+		var journal *trafficJournal
+		assertVPNStateRoundTripWithLog(t, encodeNetworkTestState(t, state), endpoint.URL, &journal)
+		trace := journal.snapshot()
+		var events []trafficEvent
+		if err := json.Unmarshal([]byte(trace), &events); err != nil {
+			t.Fatal(err)
+		}
+		var route, reserve bool
+		for _, event := range events {
+			if event.Flow != 17 {
+				t.Fatalf("unexpected observation or unrelated flow in trace: %s", trace)
+			}
+			route = route || event.Stage == "route" && event.Profile == exit.Name && event.Rule == "Остальной трафик"
+			reserve = reserve || event.Stage == "hop" && strings.Contains(event.Profile, "First hop · Imported Auto") &&
+				strings.Contains(event.Profile, "(резерв)")
+		}
+		if !route || !reserve || strings.Contains(trace, credential) || strings.Contains(trace, auth) {
+			t.Fatalf("want correlated route and actual reserve without credentials: %s", trace)
+		}
+	})
 }
 
 func startVPNTestServer(t *testing.T, raw string) {
@@ -222,6 +289,11 @@ func encodeNetworkTestState(t *testing.T, state clientState) string {
 
 func assertVPNStateRoundTrip(t *testing.T, raw, target string) {
 	t.Helper()
+	assertVPNStateRoundTripWithLog(t, raw, target, nil)
+}
+
+func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, journal **trafficJournal) {
+	t.Helper()
 	plan, err := NewVPNPlan(raw, false)
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +311,10 @@ func assertVPNStateRoundTrip(t *testing.T, raw, target string) {
 	if strings.Contains(fmt.Sprint(clientConfig.xray["routing"]), "bittorrent") {
 		t.Fatal("subscription routing must not override the user")
 	}
+	if journal != nil {
+		*journal = clientConfig.traffic
+		clientConfig.traffic.enabled.Store(true)
+	}
 	engine, err := clientConfig.start(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +322,8 @@ func assertVPNStateRoundTrip(t *testing.T, raw, target string) {
 	defer engine.Close()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+			ctx = xctx.ContextWithID(ctx, 17)
+			ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: "hyroute-tun"})
 			dest, err := xnet.ParseDestination("tcp:" + address)
 			if err != nil {
 				return nil, err

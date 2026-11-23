@@ -6,6 +6,7 @@ struct ServerGroupsPage: View {
 
   private var servers: [VPNProfile] {
     var seen = Set<String>()
+    if let candidates = client.state.groupServers { return candidates }
     return client.state.profiles.filter { $0.balance != true && seen.insert($0.id).inserted }
   }
 
@@ -41,6 +42,7 @@ private struct ServerGroupEditor: View {
   @State private var reserve: String
   @State private var error: String?
   @State private var confirmingDelete = false
+  @State private var query = ""
 
   init(client: Client, servers: [VPNProfile], group: ServerGroup? = nil) {
     self.client = client
@@ -55,7 +57,7 @@ private struct ServerGroupEditor: View {
     Form {
       TextField("Название группы", text: $name)
       Section {
-        ForEach(servers) { server in
+        ForEach(servers.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }) { server in
           Toggle(server.title, isOn: Binding(get: { primary.contains(server.id) }, set: { enabled in
             if enabled { primary.insert(server.id) } else { primary.remove(server.id) }
           }))
@@ -76,6 +78,7 @@ private struct ServerGroupEditor: View {
       }
     }
     .hyList()
+    .searchable(text: $query, prompt: "Найти основной сервер")
     .disabled(client.busy)
     .navigationTitle(id.isEmpty ? "Новая группа" : "Настройки группы")
     .navigationBarTitleDisplayMode(.inline)

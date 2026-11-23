@@ -340,6 +340,7 @@ func ClientStateView(raw string) (string, error) {
 		ActiveRoutingProfile string                `json:"activeRoutingProfile"`
 		RoutingProfiles      []routingProfileView  `json:"routingProfiles"`
 		ServerGroups         []serverGroup         `json:"serverGroups,omitempty"`
+		GroupServers         []serverPreview       `json:"groupServers,omitempty"`
 	}{
 		Subscriptions:        make([]subscriptionPreview, 0, len(state.Subscriptions)),
 		Settings:             state.Settings,
@@ -355,8 +356,14 @@ func ClientStateView(raw string) (string, error) {
 		preview.RefreshFailed = item.RefreshFailed || item.AttemptedAt > item.RefreshedAt
 		view.Subscriptions = append(view.Subscriptions, preview)
 	}
+	servers, order := state.groupCandidates()
+	for _, id := range order {
+		profile := servers[id].profile
+		view.GroupServers = append(view.GroupServers, serverPreview{
+			ID: id, Name: profile.Name, Host: profile.Host, Protocol: profile.Protocol,
+		})
+	}
 	if len(state.ServerGroups) > 0 {
-		servers := state.singleServers()
 		preview := subscriptionPreview{ID: groupSubscriptionID, Title: "Мои группы"}
 		for _, group := range state.ServerGroups {
 			preview.Servers = append(preview.Servers, group.preview(servers))

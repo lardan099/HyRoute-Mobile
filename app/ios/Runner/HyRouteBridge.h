@@ -14,6 +14,7 @@ void HyRouteCancelMaintenance(NSObject *maintenance);
 NSString * _Nullable HyRouteRefreshWithMaintenance(NSObject *maintenance, NSString *state);
 BOOL HyRouteUpdateGeoWithMaintenance(NSObject *maintenance, NSString *state);
 NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings);
+NSString * _Nullable HyRouteSaveSettingsWithIssue(NSString *state, NSString *settings, NSString * _Nullable * _Nonnull issue);
 void HyRouteConfigureGeo(NSString *directory);
 NSString * _Nullable HyRouteGeoTags(void);
 BOOL HyRouteUpdateGeo(void);
@@ -33,6 +34,9 @@ NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSS
 NSObject * _Nullable HyRoutePrepareVPN(NSObject *plan);
 NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd);
 void HyRouteStopVPN(NSObject *session);
+void HyRouteSetTrafficLogging(NSObject *session, BOOL enabled);
+NSString *HyRouteTrafficEvents(NSObject *session);
+void HyRouteClearTrafficEvents(NSObject *session);
 void HyRouteRecordVPNEvent(NSString *path, NSString *event);
 void HyRouteRecordVPNError(NSString *path, NSString *event, NSString *source, int32_t code);
 NSString *HyRouteVPNJournalEvents(NSString *appPath, NSString *tunnelPath);

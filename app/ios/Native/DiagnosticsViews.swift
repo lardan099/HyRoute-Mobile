@@ -168,3 +168,141 @@ struct VPNJournalPage: View {
     loading = false
   }
 }
+
+struct TrafficEvent: Decodable, Identifiable {
+  let id: UInt64
+  let flow: UInt32
+  let time: Int64
+  let stage: String
+  let destination: String
+  let profile: String
+  let rule: String?
+  let error: String?
+
+  var date: Date { Date(timeIntervalSince1970: Double(time) / 1000) }
+
+  var title: String {
+    switch stage {
+    case "hop": return "Узел цепочки"
+    case "blocked": return "Заблокировано"
+    case "dialError": return "Ошибка соединения"
+    case "error": return "Ошибка передачи"
+    default: return "Маршрут"
+    }
+  }
+
+  var detail: String { [profile, rule, error].compactMap { $0 }.joined(separator: " · ") }
+}
+
+struct TrafficJournalPage: View {
+  @ObservedObject var client: Client
+  @State private var search = ""
+  @State private var onlyErrors = false
+  @State private var writing = false
+  @State private var issue: String?
+
+  private var visible: [TrafficEvent] {
+    let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    return client.trafficEvents.filter { event in
+      (!onlyErrors || event.error != nil || event.stage == "blocked") &&
+        (query.isEmpty || [event.destination, event.detail, String(event.flow)].contains {
+          $0.localizedCaseInsensitiveContains(query)
+        })
+    }
+  }
+
+  var body: some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+          Toggle("Запись подключений", isOn: Binding(
+            get: { client.trafficLogging },
+            set: { enabled in Task { await perform { try await client.setTrafficLogging(enabled) } } }
+          ))
+          .accessibilityIdentifier("trafficLogging")
+          .disabled(writing)
+          Text("Адреса хранятся в памяти VPN. После остановки доступны записи, которые уже открыло приложение.")
+            .font(.footnote).foregroundStyle(HyStyle.muted)
+          if let issue { Text(issue).font(.footnote).foregroundStyle(HyStyle.failure) }
+        }
+        .hyCard()
+
+        Picker("События", selection: $onlyErrors) {
+          Text("Все").tag(false)
+          Text("Ошибки и блокировки").tag(true)
+        }
+        .pickerStyle(.segmented)
+
+        if visible.isEmpty {
+          Text(emptyMessage)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(HyStyle.muted)
+            .hyCard()
+        } else {
+          ForEach(visible) { event in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(event.destination).font(.body.weight(.semibold))
+              Text(event.detail).font(.subheadline).foregroundStyle(HyStyle.ink)
+              Text("\(event.date.formatted(date: .omitted, time: .standard)) · \(event.title) · #\(event.flow)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(event.error == nil ? HyStyle.muted : HyStyle.failure)
+            }
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .hyCard(padding: 12)
+          }
+        }
+      }
+      .padding(16)
+    }
+    .hyScreen()
+    .navigationTitle("Журнал подключений")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $search, prompt: "Адрес, профиль или номер")
+    .task(id: client.vpnStatus) {
+      guard client.vpnStatus == .connected else { return }
+      while !Task.isCancelled {
+        if !writing {
+          do { try await client.refreshTrafficLog(); issue = nil }
+          catch { if !Task.isCancelled { issue = "VPN не ответил на запрос журнала." } }
+        }
+        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+      }
+    }
+    .toolbar {
+      Menu {
+        Button {
+          UIPasteboard.general.string = visible.map {
+            "\($0.date.formatted()) · #\($0.flow) · \($0.title) · \($0.destination) · \($0.detail)"
+          }.joined(separator: "\n")
+        } label: {
+          Label("Копировать записи", systemImage: "doc.on.doc")
+        }
+        .disabled(visible.isEmpty)
+        Button(role: .destructive) {
+          Task { await perform { try await client.clearTrafficLog() } }
+        } label: {
+          Label("Очистить журнал", systemImage: "trash")
+        }
+        .disabled(writing || client.trafficEvents.isEmpty)
+      } label: {
+        Label("Действия с журналом", systemImage: "ellipsis.circle")
+      }
+    }
+  }
+
+  private var emptyMessage: String {
+    if !client.trafficLogging { return "Включите запись подключений." }
+    if client.vpnStatus != .connected { return "Подключите VPN, чтобы увидеть события." }
+    return search.isEmpty && !onlyErrors ? "Откройте сайт или приложение. Здесь появится его маршрут." :
+      "Под фильтр ничего не попало."
+  }
+
+  private func perform(_ operation: () async throws -> Void) async {
+    guard !writing else { return }
+    writing = true
+    defer { writing = false }
+    do { try await operation(); issue = nil }
+    catch { issue = "Не удалось изменить журнал. Повторите после подключения VPN." }
+  }
+}

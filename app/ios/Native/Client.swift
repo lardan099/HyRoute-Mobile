@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NetworkExtension
 import SwiftUI
@@ -6,6 +7,10 @@ private enum CoreError: Error { case invalidResult, missingTunnelExtension }
 private struct ClientMessage: LocalizedError {
   let text: String
   var errorDescription: String? { text }
+}
+
+private func vpnFingerprint(_ snapshot: String) -> Data? {
+  HyRouteRecoveryState(snapshot).map { Data(SHA256.hash(data: Data($0.utf8))) }
 }
 
 actor NativeCore {
@@ -36,6 +41,16 @@ actor NativeCore {
     let folder = try store.prepareDirectory()
     let legacy = folder.appendingPathComponent("geo", isDirectory: true)
     return try VPNStorage.prepareGeodata(legacy: legacy)
+  }
+
+  func geodataVersions() throws -> [String: Date] {
+    let directory = try geodataDirectory()
+    var dates: [String: Date] = [:]
+    for name in ["geoip.dat", "geosite.dat"] {
+      dates[name] = try? directory.appendingPathComponent(name)
+        .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+    return dates
   }
 
   func geodataSnapshot(for state: String) throws -> Data {
@@ -102,7 +117,17 @@ actor NativeCore {
 
   func save(_ settings: ClientSettings) throws -> ClientState {
     let raw = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
-    return try persist(HyRouteSaveSettings(try store.read(), raw))
+    var issue: NSString?
+    guard let updated = HyRouteSaveSettingsWithIssue(try routingState(), raw, &issue) else {
+      throw ClientMessage(text: (issue as String?) ?? "Не удалось сохранить настройки VPN.")
+    }
+    #if targetEnvironment(simulator)
+    if routingFixture != nil {
+      routingFixture = updated
+      return try view(updated)
+    }
+    #endif
+    return try persist(updated)
   }
 
   func changeRoutingProfile(_ operation: String, id: String, name: String) throws -> ClientState {
@@ -174,6 +199,11 @@ final class Client: ObservableObject {
   private var mayRetryExtension = false
   private var updatingAutomatically = false
   private var stateRevision = 0
+  private var startingFingerprint: Data?
+  @Published private(set) var preferencesPending = false
+  @Published private(set) var restartingVPN = false
+  @Published private(set) var trafficLogging = UserDefaults.standard.bool(forKey: "vpnTrafficLogging")
+  @Published private(set) var trafficEvents: [TrafficEvent] = []
   @Published private(set) var state = ClientState()
   @Published private(set) var ready = false
   @Published private(set) var busy = false
@@ -191,14 +221,43 @@ final class Client: ObservableObject {
     }) {
       syncVPNStatus()
       ready = true
+      await checkAppliedSettings()
     }
   }
 
   func toggleVPN() async {
+    guard !restartingVPN else { return }
+    await changeVPNStatus()
+  }
+
+  var canApplyVPNChanges: Bool {
+    preferencesPending && [.connected, .reasserting, .connecting].contains(vpnStatus)
+  }
+
+  func reconnectVPN() async {
+    guard canApplyVPNChanges, !restartingVPN, !vpnBusy, !stoppingVPN else { return }
+    restartingVPN = true
+    defer { restartingVPN = false }
+    await changeVPNStatus()
+    guard stoppingVPN || vpnStatus == .disconnected || vpnStatus == .invalid else { return }
+    let deadline = ContinuousClock.now + .seconds(10)
+    while vpnStatus != .disconnected && vpnStatus != .invalid && ContinuousClock.now < deadline {
+      do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+      syncVPNStatus()
+    }
+    guard vpnStatus == .disconnected || vpnStatus == .invalid else {
+      error = "VPN ещё отключается. Повторите подключение после остановки."
+      return
+    }
+    await changeVPNStatus()
+  }
+
+  private func changeVPNStatus() async {
     guard !vpnBusy, !stoppingVPN else { return }
     attemptID = UUID()
     if vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting {
       finishStartup()
+      startingFingerprint = nil
       stoppingVPN = true
       do {
         if manager?.isOnDemandEnabled == true { try await disarmRecovery() }
@@ -221,6 +280,7 @@ final class Client: ObservableObject {
   }
 
   private func launchVPN() async {
+    startingFingerprint = nil
     do {
       let snapshot = try await core.vpnState()
       let unavailableGeo = await core.unavailableGeo(in: snapshot)
@@ -237,6 +297,7 @@ final class Client: ObservableObject {
         await core.record("vpn_preferences_stale")
         try await requestTunnel(snapshot)
       }
+      startingFingerprint = vpnFingerprint(snapshot)
       watchStartup()
       await core.record("vpn_handoff")
     } catch CoreError.missingTunnelExtension {
@@ -300,7 +361,7 @@ final class Client: ObservableObject {
       await logVPNError(error, event: "vpn_geo_bundle_error")
       throw ClientMessage(text: "Не удалось подготовить категории GeoSite/GeoIP. Проверьте базы в настройках правил.")
     }
-    var options: [String: NSObject] = ["state": snapshot as NSString]
+    var options: [String: NSObject] = ["state": snapshot as NSString, "trafficLogging": NSNumber(value: trafficLogging)]
     if geodata.isEmpty {
       try session.startTunnel(options: options)
       return
@@ -406,6 +467,32 @@ final class Client: ObservableObject {
 
   func journal() async throws -> [String] { try await core.journal() }
 
+  func setTrafficLogging(_ enabled: Bool) async throws {
+    if vpnStatus == .connected {
+      try await updateTraffic(TrafficCommand(action: .trafficSet, enabled: enabled))
+    } else if [.connecting, .reasserting, .disconnecting].contains(vpnStatus) {
+      throw ClientMessage(text: "Дождитесь завершения подключения.")
+    }
+    trafficLogging = enabled
+    UserDefaults.standard.set(enabled, forKey: "vpnTrafficLogging")
+  }
+
+  func clearTrafficLog() async throws {
+    try await updateTraffic(TrafficCommand(action: .trafficClear))
+    trafficEvents = []
+  }
+
+  func refreshTrafficLog() async throws {
+    try await updateTraffic(TrafficCommand(action: .trafficStatus))
+  }
+
+  private func updateTraffic(_ command: TrafficCommand) async throws {
+    guard vpnStatus == .connected, let session = manager?.connection as? NETunnelProviderSession else { return }
+    let response = try await session.hyRouteMessage(JSONEncoder().encode(command))
+    guard !Task.isCancelled, vpnStatus == .connected, session === manager?.connection else { return }
+    trafficEvents = try JSONDecoder().decode([TrafficEvent].self, from: response)
+  }
+
   func probeHandle(scope: String, id: String) async throws -> ProbeHandle {
     #if targetEnvironment(simulator)
     if ProcessInfo.processInfo.environment["HYROUTE_UI_TEST"] == "1" {
@@ -452,6 +539,14 @@ final class Client: ObservableObject {
         reportDisconnect(connection, event: "vpn_disconnect", message: "iOS отключила активный VPN. Подробности в журнале.")
       }
       stoppingVPN = false
+    }
+    if status == .connected, let fingerprint = startingFingerprint {
+      startingFingerprint = nil
+      UserDefaults.standard.set(fingerprint, forKey: "vpnAppliedFingerprint")
+      UserDefaults.standard.removeObject(forKey: "vpnGeodataPending")
+      Task { await checkAppliedSettings() }
+    } else if status == .connected && vpnStatus != .connected && trafficLogging {
+      Task { try? await updateTraffic(TrafficCommand(action: .trafficSet, enabled: true)) }
     }
     vpnStatus = stoppingVPN ? .disconnecting : status
   }
@@ -605,6 +700,23 @@ final class Client: ObservableObject {
     return await save(next, reportError: reportError)
   }
 
+  func saveChain(exit: String, entry: String?) async throws {
+    guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
+    busy = true
+    defer { busy = false }
+    var settings = state.settings
+    settings.routing.viaProfiles[exit] = entry
+    settings.selected = state.selected?.id
+    do {
+      let updated = try await core.save(settings)
+      await applySettingsChange(updated)
+    } catch let message as ClientMessage {
+      throw message
+    } catch {
+      throw ClientMessage(text: "Не удалось записать цепочку в хранилище HyRoute.")
+    }
+  }
+
   func saveSplitDNS(_ settings: SplitDNS?) async -> Bool {
     var next = state.settings
     next.splitDNS = settings
@@ -615,16 +727,16 @@ final class Client: ObservableObject {
     guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
     busy = true
     defer { busy = false }
-    state = try await core.changeServerGroup(id: id, group: group)
-    stateRevision += 1
+    let updated = try await core.changeServerGroup(id: id, group: group)
+    await applySettingsChange(updated)
   }
 
   func changeRoutingProfile(_ operation: String, id: String = "", name: String = "") async throws {
     guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
     busy = true
     defer { busy = false }
-    state = try await core.changeRoutingProfile(operation, id: id, name: name)
-    stateRevision += 1
+    let updated = try await core.changeRoutingProfile(operation, id: id, name: name)
+    await applySettingsChange(updated)
   }
 
   func checkRoute(_ address: String, ip: String, transport: String) async throws -> CheckedRoute {
@@ -633,11 +745,14 @@ final class Client: ObservableObject {
 
   func geoTags(update: Bool) async throws -> [String] {
     let snapshot = update ? try await core.vpnState() : ""
-    return try await Task.detached(priority: .utility) {
+    let previous = update ? (try? await core.geodataVersions()) : nil
+    let tags = try await Task.detached(priority: .utility) {
       if update && !HyRouteUpdateGeoForState(snapshot) { throw CoreError.invalidResult }
       guard let tags = HyRouteGeoTags() else { throw CoreError.invalidResult }
       return try JSONDecoder().decode([String].self, from: Data(tags.utf8))
     }.value
+    if update, previous != (try? await core.geodataVersions()) { markGeodataChanged(snapshot) }
+    return tags
   }
 
   func geoSources() async throws -> [String: String] {
@@ -653,7 +768,7 @@ final class Client: ObservableObject {
 
   func importGeoFile(_ kind: String, file: URL) async -> Bool {
     guard let snapshot = try? await core.vpnState() else { return false }
-    return await Task.detached(priority: .utility) {
+    let installed = await Task.detached(priority: .utility) {
       let scoped = file.startAccessingSecurityScopedResource()
       defer { if scoped { file.stopAccessingSecurityScopedResource() } }
       var coordinationError: NSError?
@@ -663,6 +778,8 @@ final class Client: ObservableObject {
       }
       return coordinationError == nil && installed
     }.value
+    if installed { markGeodataChanged(snapshot) }
+    return installed
   }
 
   func refreshAutomatically() async {
@@ -671,12 +788,34 @@ final class Client: ObservableObject {
     defer { updatingAutomatically = false }
     let revision = stateRevision
     if let snapshot = try? await core.autoRefresh(), !busy, stateRevision == revision {
-      state = snapshot
-      stateRevision += 1
+      await applySettingsChange(snapshot)
     }
     if !Task.isCancelled, let snapshot = try? await core.vpnState() {
-      _ = await Task.detached(priority: .utility) { HyRouteAutoUpdateGeoForState(snapshot) }.value
+      let previous = try? await core.geodataVersions()
+      let updated = await Task.detached(priority: .utility) { HyRouteAutoUpdateGeoForState(snapshot) }.value
+      if updated, previous != (try? await core.geodataVersions()) { markGeodataChanged(snapshot) }
     }
+  }
+
+  private func markGeodataChanged(_ snapshot: String) {
+    guard [.connected, .reasserting, .connecting].contains(vpnStatus),
+          !HyRouteVPNGeodataKinds(snapshot).isEmpty else { return }
+    UserDefaults.standard.set(true, forKey: "vpnGeodataPending")
+    preferencesPending = true
+  }
+
+  private func applySettingsChange(_ updated: ClientState) async {
+    state = updated
+    stateRevision += 1
+    await checkAppliedSettings()
+  }
+
+  private func checkAppliedSettings() async {
+    let revision = stateRevision
+    guard let raw = try? await core.vpnState(), revision == stateRevision else { return }
+    let saved = startingFingerprint ?? UserDefaults.standard.data(forKey: "vpnAppliedFingerprint")
+    preferencesPending = UserDefaults.standard.bool(forKey: "vpnGeodataPending") ||
+      (saved != nil && vpnFingerprint(raw) != saved)
   }
 
   private func save(_ settings: ClientSettings, reportError: Bool = true) async -> Bool {
@@ -690,8 +829,8 @@ final class Client: ObservableObject {
     busy = true
     defer { busy = false }
     do {
-      state = try await operation()
-      stateRevision += 1
+      let updated = try await operation()
+      await applySettingsChange(updated)
       return true
     } catch {
       if reportError { self.error = failure }

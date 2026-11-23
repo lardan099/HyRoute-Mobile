@@ -445,16 +445,34 @@ private struct ChainEditor: View {
   @Environment(\.dismiss) private var dismiss
   @State private var exit = ""
   @State private var entry = ""
-  @State private var saveFailed = false
+  @State private var saveError: String?
 
   private var profiles: [VPNProfile] { client.state.chainProfiles }
-  private var available: Set<String> { Set(profiles.map(\.id)) }
+  private var entrances: [VPNProfile] { client.state.profiles }
+  private var exits: Set<String> { Set(profiles.map(\.id)) }
+  private var available: Set<String> { Set(entrances.map(\.id)) }
   private var routing: Routing { client.state.settings.routing }
   private var unavailable: [String] { routing.unavailableChainExits(available: available) }
+  private var savedExits: [String] {
+    routing.viaProfiles.keys.filter { !unavailable.contains($0) }
+      .sorted { client.state.profileTitle($0).localizedStandardCompare(client.state.profileTitle($1)) == .orderedAscending }
+  }
 
   var body: some View {
     NavigationStack {
       Form {
+        if !savedExits.isEmpty {
+          Section("Сохранённые связи") {
+            ForEach(savedExits, id: \.self) { saved in
+              if let first = routing.viaProfiles[saved] {
+                Button { selectExit(saved) } label: {
+                  HyRow(title: client.state.profileTitle(saved), symbol: "link",
+                        detail: "Через \(client.state.profileTitle(first))")
+                }
+              }
+            }
+          }
+        }
         if !unavailable.isEmpty {
           Section("Недоступные связи") {
             ForEach(unavailable, id: \.self) { brokenExit in
@@ -462,12 +480,13 @@ private struct ChainEditor: View {
                 VStack(alignment: .leading, spacing: 10) {
                   chainEndpoint("Выход", value: client.state.profileTitle(brokenExit), valid: available.contains(brokenExit))
                   chainEndpoint("Через", value: client.state.profileTitle(brokenEntry), valid: available.contains(brokenEntry))
-                  if available.contains(brokenExit), profiles.count >= 2 {
+                  if exits.contains(brokenExit), entrances.count >= 2 {
                     Menu("Заменить промежуточный профиль") {
-                      ForEach(profiles.filter { $0.id != brokenExit }) { profile in
+                      ForEach(entrances.filter { $0.id != brokenExit }) { profile in
                         Button(profile.title) {
                           exit = brokenExit
                           entry = profile.id
+                          saveError = nil
                         }
                       }
                     }
@@ -491,6 +510,7 @@ private struct ChainEditor: View {
         if !profiles.isEmpty {
           Section("Настроить связь") {
             Picker("Выходной профиль", selection: Binding(get: { exit }, set: selectExit)) {
+              Text("Выбрать").tag("")
               ForEach(profiles) { Text($0.title).tag($0.id) }
             }
             Picker("Через профиль", selection: $entry) {
@@ -498,13 +518,15 @@ private struct ChainEditor: View {
               if !entry.isEmpty && !available.contains(entry) {
                 Text(client.state.profileTitle(entry)).tag(entry)
               }
-              ForEach(profiles.filter { $0.id != exit }) { Text($0.title).tag($0.id) }
+              ForEach(entrances.filter { $0.id != exit }) { Text($0.title).tag($0.id) }
             }
+            .disabled(exit.isEmpty)
+            .onChange(of: entry) { _ in saveError = nil }
           }
         }
-        if saveFailed {
-          Text("Не удалось сохранить связь. Проверьте остальные правила.")
-            .foregroundStyle(HyStyle.failure)
+        if let saveError {
+          Text(saveError).foregroundStyle(HyStyle.failure)
+            .accessibilityIdentifier("chain-save-error")
         }
       }
       .disabled(client.busy)
@@ -515,38 +537,32 @@ private struct ChainEditor: View {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
         ToolbarItem(placement: .confirmationAction) {
           Button("Сохранить") {
-            var next = routing
-            next.viaProfiles[exit] = entry.isEmpty ? nil : entry
             Task {
-              saveFailed = false
-              if await client.saveRouting(next, reportError: false) { dismiss() }
-              else { saveFailed = true }
+              do {
+                try await client.saveChain(exit: exit, entry: entry.isEmpty ? nil : entry)
+                dismiss()
+              } catch { saveError = error.localizedDescription }
             }
           }
-          .disabled(!available.contains(exit) || (!entry.isEmpty && !available.contains(entry)) || client.busy)
+          .disabled(!exits.contains(exit) || (!entry.isEmpty && !available.contains(entry)) || client.busy ||
+                    entry == (routing.viaProfiles[exit] ?? ""))
         }
       }
-    }
-    .onAppear {
-      let selected = client.state.selected?.id
-      selectExit(profiles.first { $0.id == selected }?.id ?? profiles.first?.id ?? "")
     }
   }
 
   private func selectExit(_ id: String) {
     exit = id
     entry = routing.viaProfiles[id] ?? ""
+    saveError = nil
   }
 
   private func removeLink(_ id: String) async {
-    var next = routing
-    next.viaProfiles.removeValue(forKey: id)
-    saveFailed = false
-    if await client.saveRouting(next, reportError: false) {
+    saveError = nil
+    do {
+      try await client.saveChain(exit: id, entry: nil)
       if exit == id { entry = "" }
-    } else {
-      saveFailed = true
-    }
+    } catch { saveError = error.localizedDescription }
   }
 
   private func chainEndpoint(_ title: String, value: String, valid: Bool) -> some View {

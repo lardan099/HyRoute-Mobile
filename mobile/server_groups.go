@@ -2,13 +2,16 @@ package mobile
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/lardan099/hyroute-mobile/internal/hysteria"
+	"github.com/lardan099/hyroute-mobile/internal/vless"
 )
 
 const groupSubscriptionID = "server-groups"
@@ -24,19 +27,46 @@ func (g serverGroup) memberIDs() []string {
 	return append(slices.Clone(g.Primary), g.Reserve)
 }
 
-func (s clientState) singleServers() map[string]hysteria.Profile {
-	servers := make(map[string]hysteria.Profile)
+type groupCandidate struct {
+	profile hysteria.Profile
+	node    *vless.Node
+}
+
+func (s clientState) groupCandidates() (map[string]groupCandidate, []string) {
+	servers := make(map[string]groupCandidate)
+	var order []string
+	add := func(candidate groupCandidate) {
+		id := candidate.profile.ID
+		if _, exists := servers[id]; !exists {
+			servers[id] = candidate
+			order = append(order, id)
+		}
+	}
 	for _, sub := range s.Subscriptions {
 		for _, profile := range sub.Snapshot.Servers {
-			if profile.ID != "" && !profile.Missing && profile.Balance == nil {
-				servers[profile.ID] = profile
+			if profile.ID == "" || profile.Missing {
+				continue
+			}
+			if profile.Balance == nil {
+				add(groupCandidate{profile: profile})
+				continue
+			}
+			for _, node := range profile.Balance.Nodes {
+				identity := node
+				identity.Settings.ID = ""
+				wire, _ := json.Marshal(identity)
+				key := sha256.Sum256(append([]byte(profile.ID+"\x00"), wire...))
+				add(groupCandidate{node: &node, profile: hysteria.Profile{
+					ID: fmt.Sprintf("node-%x", key[:16]), Name: fmt.Sprintf("%s · %s:%d", profile.Name, node.Host, node.Port),
+					Host: node.Host, Ports: fmt.Sprint(node.Port), Protocol: hysteria.ProtoVLESS, VLESS: node.Settings,
+				}})
 			}
 		}
 	}
-	return servers
+	return servers, order
 }
 
-func (g serverGroup) preview(servers map[string]hysteria.Profile) serverPreview {
+func (g serverGroup) preview(servers map[string]groupCandidate) serverPreview {
 	missing := true
 	for _, id := range g.memberIDs() {
 		if _, ok := servers[id]; ok {
@@ -82,10 +112,10 @@ func ChangeServerGroup(raw, id, definition string) (string, error) {
 		if len(group.Primary) < 1 || len(group.Primary) > 16 || group.Reserve == "" {
 			return "", errors.New("выберите от 1 до 16 основных серверов и один резервный")
 		}
-		servers := state.singleServers()
+		servers, _ := state.groupCandidates()
 		seen := make(map[string]bool)
 		for _, member := range group.memberIDs() {
-			if servers[member].ID == "" || seen[member] {
+			if servers[member].profile.ID == "" || seen[member] {
 				return "", errors.New("выберите разные доступные серверы для группы")
 			}
 			seen[member] = true
@@ -100,18 +130,10 @@ func ChangeServerGroup(raw, id, definition string) (string, error) {
 			group.ID = id
 			state.ServerGroups[index] = group
 		}
+		if err := state.validateSavedGroupChains(); err != nil {
+			return "", err
+		}
 	}
 	data, err := json.Marshal(state)
 	return string(data), err
-}
-
-func (s clientState) validateGroupChains(via map[string]string) error {
-	for _, group := range s.ServerGroups {
-		for exit, entry := range via {
-			if group.ID == exit || group.ID == entry {
-				return errors.New("для цепочки выберите отдельные серверы вместо своей группы")
-			}
-		}
-	}
-	return nil
 }

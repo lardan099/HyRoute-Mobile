@@ -129,6 +129,7 @@ func init() {
 type VPNSession struct {
 	instance *core.Instance
 	cancel   context.CancelFunc
+	traffic  *trafficJournal
 }
 
 func (p *VPNPrepared) Start(fd int32, platformImpl VPNPlatform) (*VPNSession, error) {
@@ -155,7 +156,7 @@ func (p *VPNPrepared) Start(fd int32, platformImpl VPNPlatform) (*VPNSession, er
 		vpnRuntime.sockets.Store(nil)
 		return nil, errors.New("не удалось запустить сетевое ядро")
 	}
-	session := &VPNSession{instance: instance, cancel: cancel}
+	session := &VPNSession{instance: instance, cancel: cancel, traffic: p.config.traffic}
 	vpnRuntime.session = session
 	return session, nil
 }
@@ -202,6 +203,7 @@ func (p *vpnConfiguration) start(ctx context.Context, hooks VPNPlatform) (*core.
 			outbound.ProxySettings = serial.ToTypedMessage(wrapperspb.String(splitDNSTag))
 		}
 	}
+	ctx = p.instrumentTraffic(ctx, config)
 	ctx = context.WithValue(ctx, vpnContextKey{}, vpnContextValue{p, hooks})
 	instance, err := core.NewWithContext(ctx, config)
 	if err != nil {
@@ -235,21 +237,28 @@ func (r *vpnFlowRouter) PickRoute(ctx routing.Context) (routing.Route, error) {
 	return vpnFlowRoute{ctx, r.route(ctx)}, nil
 }
 
-func (r *vpnFlowRouter) route(ctx routing.Context) string {
-	plan := r.configuration.plan
-	var subject rules.Subject
+func vpnSubject(ctx routing.Context) (subject rules.Subject) {
 	switch ctx.GetNetwork() {
 	case xnet.Network_TCP:
 		subject.Proto = 6
 	case xnet.Network_UDP:
 		subject.Proto = 17
 	default:
-		return blockTag
+		return subject
 	}
 	if ips := ctx.GetTargetIPs(); len(ips) != 0 {
 		if ip, ok := netip.AddrFromSlice(ips[0]); ok {
 			subject.Dst = netip.AddrPortFrom(ip.Unmap(), uint16(ctx.GetTargetPort()))
 		}
+	}
+	return subject
+}
+
+func (r *vpnFlowRouter) route(ctx routing.Context) string {
+	plan := r.configuration.plan
+	subject := vpnSubject(ctx)
+	if subject.Proto == 0 {
+		return blockTag
 	}
 	if len(plan.router.appPackages) > 0 {
 		ips := ctx.GetSourceIPs()

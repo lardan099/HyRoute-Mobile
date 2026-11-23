@@ -20,8 +20,14 @@ NSString * _Nullable HyRouteAddSubscription(NSString *state, NSString *input, BO
 }
 
 NSString * _Nullable HyRouteSaveSettings(NSString *state, NSString *settings) {
+    NSString *issue = nil;
+    return HyRouteSaveSettingsWithIssue(state, settings, &issue);
+}
+
+NSString * _Nullable HyRouteSaveSettingsWithIssue(NSString *state, NSString *settings, NSString * _Nullable * _Nonnull issue) {
     NSError *error = nil;
     NSString *updated = MobileSaveClientSettings(state, settings, NO, &error);
+    *issue = error.localizedDescription;
     return error == nil ? updated : nil;
 }
 
@@ -171,6 +177,18 @@ NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd) {
 
 void HyRouteStopVPN(NSObject *session) {
     [(MobileVPNSession *)session stop];
+}
+
+void HyRouteSetTrafficLogging(NSObject *session, BOOL enabled) {
+    [(MobileVPNSession *)session setTrafficLogging:enabled];
+}
+
+NSString *HyRouteTrafficEvents(NSObject *session) {
+    return [(MobileVPNSession *)session trafficEvents] ?: @"[]";
+}
+
+void HyRouteClearTrafficEvents(NSObject *session) {
+    [(MobileVPNSession *)session clearTrafficEvents];
 }
 
 void HyRouteRecordVPNEvent(NSString *path, NSString *event) {

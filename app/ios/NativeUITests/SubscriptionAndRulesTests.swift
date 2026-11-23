@@ -73,6 +73,14 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.buttons["Вернуть runetfreedom"].exists)
   }
 
+  func testOpensTrafficJournalFromHome() {
+    let app = launch()
+    tap(app.buttons["traffic-journal"])
+    XCTAssertTrue(app.navigationBars["Журнал подключений"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.switches["trafficLogging"].exists)
+    XCTAssertTrue(app.segmentedControls.buttons["Ошибки и блокировки"].exists)
+  }
+
   func testChecksSavedRouteAndShowsSubscriptionTraffic() {
     let app = launch(screen: "routes-test")
     tap(app.buttons["tab-subscriptions"])

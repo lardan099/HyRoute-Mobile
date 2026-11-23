@@ -90,7 +90,7 @@ func TestSplitDNSViaEmbeddedVPN(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	manager := engine.GetFeature(outbound.ManagerType()).(outbound.Manager)
-	handler := manager.GetHandler(splitDNSTag).(proxy.GetOutbound).GetOutbound().(*splitDNSProxy)
+	handler := manager.GetHandler(splitDNSTag).(proxy.GetOutbound).GetOutbound().(*trafficOutbound).Outbound.(*splitDNSProxy)
 	for client, server := range map[*http.Client]*httptest.Server{handler.tunnel: tunnelServer, handler.direct: directServer} {
 		roots := x509.NewCertPool()
 		roots.AddCert(server.Certificate())

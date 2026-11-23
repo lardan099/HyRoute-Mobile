@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,7 +81,7 @@ type vpnProfile struct {
 }
 
 type groupMember struct {
-	profile hysteria.Profile
+	groupCandidate
 	reserve bool
 }
 
@@ -130,7 +131,7 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 			}
 		}
 	}
-	singles := state.singleServers()
+	singles, _ := state.groupCandidates()
 	for _, group := range state.ServerGroups {
 		if group.preview(singles).Missing {
 			continue
@@ -202,13 +203,13 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 		if group, ok := groups[id]; ok {
 			for _, memberID := range group.memberIDs() {
 				member, ok := singles[memberID]
-				if !ok || member.Validate() != nil {
+				if !ok || member.profile.Validate() != nil {
 					continue
 				}
 				if err := add(cfg.ViaProfiles[memberID]); err != nil {
 					continue
 				}
-				target.group = append(target.group, groupMember{profile: member, reserve: memberID == group.Reserve})
+				target.group = append(target.group, groupMember{groupCandidate: member, reserve: memberID == group.Reserve})
 			}
 			if len(target.group) == 0 {
 				return errVPNUnsupported
@@ -243,6 +244,8 @@ type vpnConfiguration struct {
 	plan      *VPNPlan
 	xray      map[string]any
 	balancers map[string]bool
+	labels    map[string]string
+	traffic   *trafficJournal
 }
 
 func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(context.Context, string) netip.Addr) (*vpnConfiguration, error) {
@@ -257,6 +260,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	var balances, routeRules []any
 	var observation *vless.Balance
 	balancers := make(map[string]bool)
+	labels := map[string]string{directTag: "Напрямую", blockTag: "Блокировка", splitDNSTag: "Раздельный DNS"}
 	resolved := make(map[string]netip.Addr)
 	resolveOnce := func(host string) netip.Addr {
 		if ip, ok := resolved[host]; ok {
@@ -268,6 +272,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	}
 	for _, target := range p.profiles {
 		profile := target.profile
+		labels[target.tag] = journalProfileName(profile)
 		upstream := p.tags[p.router.viaProfiles[profile.ID]]
 		if profile.Balance == nil && len(target.group) == 0 {
 			ip := resolveOnce(profile.Host)
@@ -286,7 +291,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 		tag := target.tag + "-balancer"
 		var balance vless.Balance
 		if len(target.group) > 0 {
-			nodes, config, err := p.groupOutbounds(target, prefix, tag, resolveOnce)
+			nodes, config, err := p.groupOutbounds(target, prefix, tag, resolveOnce, labels)
 			if err != nil {
 				return nil, err
 			}
@@ -297,6 +302,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 			ips := make([]netip.Addr, len(balance.Nodes))
 			for i, node := range balance.Nodes {
 				ips[i] = resolveOnce(node.Host)
+				labels[prefix+strconv.Itoa(i)] = fmt.Sprintf("%s · %s", journalProfileName(profile), net.JoinHostPort(node.Host, strconv.Itoa(node.Port)))
 			}
 			nodes, config, err := vless.BalanceOutbounds(balance, ips, prefix, tag)
 			if err != nil {
@@ -335,10 +341,14 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	if observation != nil {
 		config["burstObservatory"] = observation.Observatory(prefixes)
 	}
-	return &vpnConfiguration{plan: p, xray: config, balancers: balancers}, nil
+	prepared := &vpnConfiguration{plan: p, xray: config, balancers: balancers, labels: labels}
+	if !p.android {
+		prepared.traffic = new(trafficJournal)
+	}
+	return prepared, nil
 }
 
-func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve func(string) netip.Addr) ([]any, map[string]any, error) {
+func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve func(string) netip.Addr, labels map[string]string) ([]any, map[string]any, error) {
 	var outbounds []any
 	fallback := blockTag
 	for i, member := range target.group {
@@ -350,14 +360,22 @@ func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve 
 		if member.reserve {
 			memberTag = target.tag + "-reserve"
 		}
-		out, err := profileOutbound(member.profile, ip, memberTag)
+		var out map[string]any
+		var err error
+		if member.node != nil {
+			out, err = member.node.Outbound(ip, memberTag)
+		} else {
+			out, err = profileOutbound(member.profile, ip, memberTag)
+		}
 		if err != nil {
 			continue
 		}
 		setDialerProxy(out, p.tags[p.router.viaProfiles[member.profile.ID]])
 		outbounds = append(outbounds, out)
+		labels[memberTag] = journalProfileName(target.profile) + " · " + journalProfileName(member.profile)
 		if member.reserve {
 			fallback = memberTag
+			labels[memberTag] += " (резерв)"
 		}
 	}
 	if len(outbounds) == 0 {

@@ -54,3 +54,85 @@ func validateProfileChains(viaProfiles map[string]string) error {
 	}
 	return nil
 }
+
+func (s clientState) validateGroupChains(via map[string]string) error {
+	names := make(map[string]string)
+	for _, sub := range s.Subscriptions {
+		for _, profile := range sub.Snapshot.Servers {
+			names[profile.ID] = profile.Name
+		}
+	}
+	edges := make(map[string][]string, len(via)+len(s.ServerGroups))
+	for exit, entry := range via {
+		edges[exit] = []string{entry}
+	}
+	for _, group := range s.ServerGroups {
+		names[group.ID] = group.Name
+		if via[group.ID] != "" {
+			return errors.New("Выберите группу в поле «Через профиль» и отдельный профиль для выхода.")
+		}
+		edges[group.ID] = group.memberIDs()
+	}
+	visited := make(map[string]bool)
+	stack := make(map[string]int)
+	var path []string
+	var visit func(string) error
+	visit = func(id string) error {
+		if visited[id] {
+			return nil
+		}
+		if index, found := stack[id]; found {
+			cycle := append(slices.Clone(path[index:]), id)
+			for i, id := range cycle {
+				if name := names[id]; name != "" {
+					cycle[i] = name
+				}
+			}
+			return fmt.Errorf("Цепочка замыкается: %s. Уберите одну связь из этой цепочки.", strings.Join(cycle, " → "))
+		}
+		stack[id] = len(path)
+		path = append(path, id)
+		for _, next := range edges[id] {
+			if err := visit(next); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		delete(stack, id)
+		visited[id] = true
+		return nil
+	}
+	starts := make([]string, 0, len(via))
+	for id := range via {
+		starts = append(starts, id)
+	}
+	slices.Sort(starts)
+	for _, id := range starts {
+		if err := visit(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s clientState) validateSavedGroupChains() error {
+	configs := []json.RawMessage{s.Settings.Routing}
+	for _, profile := range s.RoutingProfiles {
+		if profile.ID != s.activeRoutingID() {
+			configs = append(configs, profile.Routing)
+		}
+	}
+	for _, raw := range configs {
+		var config routingConfig
+		if len(raw) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(raw, &config); err != nil {
+			return err
+		}
+		if err := s.validateGroupChains(config.ViaProfiles); err != nil {
+			return err
+		}
+	}
+	return nil
+}

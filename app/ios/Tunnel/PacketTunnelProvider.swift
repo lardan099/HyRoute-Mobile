@@ -5,6 +5,7 @@ import NetworkExtension
 final class PacketTunnelProvider: NEPacketTunnelProvider {
   private struct StartRequest {
     let state: String
+    let trafficLogging: Bool
     let generation: Int
     let completion: (Error?) -> Void
   }
@@ -37,7 +38,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler(TunnelStartError.missingOptions)
         return
       }
-      let request = StartRequest(state: state, generation: self.generation, completion: completionHandler)
+      let request = StartRequest(state: state, trafficLogging: options?["trafficLogging"] as? Bool == true,
+                                 generation: self.generation, completion: completionHandler)
       if manualState == nil {
         HyRouteRecordVPNEvent(journal, "vpn_system_restart")
         let shared = VPNStorage.sharedGeodata
@@ -125,6 +127,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
           }
           self.packetBridge = bridge
           self.session = session
+          HyRouteSetTrafficLogging(session, request.trafficLogging)
           bridge.start()
           HyRouteRecordVPNEvent(journal, "vpn_running")
           request.completion(nil)
@@ -157,6 +160,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   override func handleAppMessage(_ data: Data, completionHandler: ((Data?) -> Void)?) {
     worker.async {
+      if data.count <= 256, let command = try? JSONDecoder().decode(TrafficCommand.self, from: data) {
+        guard let session = self.session else {
+          completionHandler?(nil)
+          return
+        }
+        switch command.action {
+        case .trafficStatus: break
+        case .trafficSet:
+          HyRouteSetTrafficLogging(session, command.enabled == true)
+        case .trafficClear:
+          HyRouteClearTrafficEvents(session)
+        }
+        completionHandler?(Data(HyRouteTrafficEvents(session).utf8))
+        return
+      }
       if data.count <= 64 * 1024, let transfer = try? PropertyListDecoder().decode(GeodataTransfer.self, from: data) {
         if transfer.action == .checkRecovery {
           completionHandler?(Self.recoveryStorageAvailable() ? GeodataTransfer.Reply.ready.data : nil)

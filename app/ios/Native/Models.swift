@@ -239,6 +239,7 @@ struct ClientState: Decodable {
   var activeRoutingProfile: String?
   var routingProfiles: [RoutingProfile]?
   var serverGroups: [ServerGroup]?
+  var groupServers: [VPNProfile]?
 
   var ruleSets: [RoutingProfile] {
     routingProfiles ?? [RoutingProfile(id: "default", name: "Основной", ruleCount: settings.routing.rules.count)]

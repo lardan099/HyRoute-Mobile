@@ -107,7 +107,21 @@ private struct RootView: View {
           }
           panel(.rules) { RulesPage(client: client, preview: previewScreen) }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { tabBar }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          VStack(spacing: 0) {
+            if client.canApplyVPNChanges || client.restartingVPN {
+              ViewThatFits(in: .horizontal) {
+                HStack { Text("Настройки изменились"); Spacer(); reconnectButton }
+                VStack(alignment: .leading, spacing: 8) { Text("Настройки изменились"); reconnectButton }
+              }
+              .font(.subheadline)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.horizontal, 16).padding(.vertical, 8)
+              .background(HyStyle.canvas)
+            }
+            tabBar
+          }
+        }
       } else if client.busy {
         ProgressView("Открытие HyRoute")
       } else {
@@ -151,6 +165,15 @@ private struct RootView: View {
     } message: {
       Text(client.error ?? "")
     }
+  }
+
+  private var reconnectButton: some View {
+    Button(client.restartingVPN ? "Переподключаем…" : "Переподключить") {
+      Task { await client.reconnectVPN() }
+    }
+    .buttonStyle(.borderedProminent)
+    .disabled(client.vpnBusy || client.restartingVPN)
+    .accessibilityIdentifier("reconnectVPN")
   }
 
   private func panel<Content: View>(_ item: Tab, @ViewBuilder content: () -> Content) -> some View {
@@ -232,6 +255,15 @@ private struct Dashboard: View {
             HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle")
           }
           .buttonStyle(.plain)
+          Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
+          NavigationLink {
+            TrafficJournalPage(client: client)
+          } label: {
+            HyRow(title: "Журнал подключений", symbol: "waveform.path",
+                  detail: "Адреса, правила, узлы и ошибки")
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("traffic-journal")
           Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
           NavigationLink {
             VPNRecoveryPage(client: client)
