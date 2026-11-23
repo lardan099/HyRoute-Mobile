@@ -102,6 +102,9 @@ func init() {
 		return &vpnFlowRouter{Router: delegate.(routing.Router), vpnContextValue: state}, nil
 	}))
 	common.Must(common.RegisterConfig((*wrapperspb.StringValue)(nil), func(ctx context.Context, raw any) (any, error) {
+		if raw.(*wrapperspb.StringValue).Value == probeTag {
+			return probeOutbound{}, nil
+		}
 		state, ok := ctx.Value(vpnContextKey{}).(vpnContextValue)
 		if !ok || state.configuration.plan.splitDNS == nil || raw.(*wrapperspb.StringValue).Value != splitDNSTag {
 			return nil, errors.New("missing HyRoute DNS configuration")
@@ -199,8 +202,8 @@ func (p *vpnConfiguration) start(ctx context.Context, hooks VPNPlatform) (*core.
 		}
 	}
 	for _, outbound := range config.Outbound {
-		if outbound.Tag == splitDNSTag {
-			outbound.ProxySettings = serial.ToTypedMessage(wrapperspb.String(splitDNSTag))
+		if outbound.Tag == splitDNSTag || outbound.Tag == probeTag {
+			outbound.ProxySettings = serial.ToTypedMessage(wrapperspb.String(outbound.Tag))
 		}
 	}
 	ctx = p.instrumentTraffic(ctx, config)

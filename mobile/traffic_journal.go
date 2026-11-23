@@ -168,6 +168,9 @@ func (p *vpnConfiguration) instrumentTraffic(ctx context.Context, config *core.C
 	}
 	state := trafficConfiguration{network: p, proxies: make([]trafficProxy, len(config.Outbound))}
 	for i, outbound := range config.Outbound {
+		if outbound.Tag == probeTag {
+			continue
+		}
 		state.proxies[i] = trafficProxy{tag: outbound.Tag, config: outbound.ProxySettings}
 		outbound.ProxySettings = serial.ToTypedMessage(wrapperspb.UInt32(uint32(i)))
 	}

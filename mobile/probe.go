@@ -1,7 +1,9 @@
 package mobile
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +15,29 @@ import (
 	"github.com/lardan099/hyroute-mobile/internal/hysteria"
 	"github.com/lardan099/hyroute-mobile/internal/vless"
 	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/outbound"
+	"github.com/xtls/xray-core/transport"
+	"github.com/xtls/xray-core/transport/internet"
 )
+
+const probeTag = "hyroute-probe"
+
+type probeHandlerKey struct{}
+
+// probeOutbound dispatches a test through its private handler without changing
+// the active VPN's outbound manager or exposing the test port.
+type probeOutbound struct{}
+
+func (probeOutbound) Process(ctx context.Context, link *transport.Link, _ internet.Dialer) error {
+	handler, ok := ctx.Value(probeHandlerKey{}).(outbound.Handler)
+	if !ok {
+		return errors.New("missing probe handler")
+	}
+	handler.Dispatch(ctx, link)
+	return nil
+}
 
 type probeTarget struct {
 	profile hysteria.Profile
@@ -109,7 +132,7 @@ func (b *ProbeBatch) run(ctx context.Context, targets []probeTarget, url, journa
 				b.results[index].Status = "running"
 				b.mu.Unlock()
 				check, cancel := context.WithTimeout(ctx, 7*time.Second)
-				status, ms := targets[index].measure(check, url)
+				status, ms := targets[index].measure(check, url, nil)
 				if ctx.Err() != nil {
 					status = "cancelled"
 				} else if check.Err() == context.DeadlineExceeded {
@@ -160,7 +183,7 @@ func (b *ProbeBatch) Snapshot() string {
 
 func (b *ProbeBatch) Cancel() { b.cancel() }
 
-func (p probeTarget) measure(ctx context.Context, url string) (string, int64) {
+func (p probeTarget) measure(ctx context.Context, url string, active *core.Instance) (string, int64) {
 	host := p.profile.Host
 	if p.node != nil {
 		host = p.node.Host
@@ -169,27 +192,28 @@ func (p probeTarget) measure(ctx context.Context, url string) (string, int64) {
 	if !ip.IsValid() {
 		return "dns", 0
 	}
-	var outbound map[string]any
+	tag := probeTag + "-" + rand.Text()
+	var proxySettings map[string]any
 	var err error
 	if p.node != nil {
-		outbound, err = p.node.Outbound(ip, "probe")
+		proxySettings, err = p.node.Outbound(ip, tag)
 	} else {
-		outbound, err = profileOutbound(p.profile, ip, "probe")
+		proxySettings, err = profileOutbound(p.profile, ip, tag)
 	}
 	if err != nil {
 		return "configuration", 0
 	}
 	config, err := json.Marshal(map[string]any{
-		"log": map[string]any{"loglevel": "none", "access": "none"}, "outbounds": []any{outbound},
+		"log": map[string]any{"loglevel": "none", "access": "none"}, "outbounds": []any{proxySettings},
 	})
 	if err != nil {
 		return "configuration", 0
 	}
-	instance, err := core.StartInstance("json", config)
+	dial, closeProbe, err := startProbeOutbound(active, config, tag)
 	if err != nil {
 		return "configuration", 0
 	}
-	defer instance.Close()
+	defer closeProbe()
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
@@ -197,7 +221,7 @@ func (p probeTarget) measure(ctx context.Context, url string) (string, int64) {
 			if err != nil {
 				return nil, err
 			}
-			return core.Dial(ctx, instance, dest)
+			return dial(ctx, dest)
 		},
 	}
 	defer transport.CloseIdleConnections()
@@ -218,4 +242,41 @@ func (p probeTarget) measure(ctx context.Context, url string) (string, int64) {
 		return "response", 0
 	}
 	return "ok", max(1, time.Since(started).Milliseconds())
+}
+
+func startProbeOutbound(active *core.Instance, config []byte, tag string) (func(context.Context, xnet.Destination) (net.Conn, error), func(), error) {
+	if active == nil {
+		vpnRuntime.Lock()
+		if vpnRuntime.session == nil {
+			instance, err := core.StartInstance("json", config)
+			vpnRuntime.Unlock()
+			if err != nil {
+				return nil, nil, err
+			}
+			return func(ctx context.Context, dest xnet.Destination) (net.Conn, error) {
+				return core.Dial(session.SetForcedOutboundTagToContext(ctx, tag), instance, dest)
+			}, func() { _ = instance.Close() }, nil
+		}
+		active = vpnRuntime.session.instance
+		vpnRuntime.Unlock()
+	}
+	// Creating a second Xray instance would replace the process-wide outbound
+	// manager used for chain dials. Give each test an isolated outbound instead.
+	parsed, err := core.LoadConfig("json", bytes.NewReader(config))
+	if err != nil {
+		return nil, nil, err
+	}
+	created, err := core.CreateObject(active, parsed.Outbound[0])
+	if err != nil {
+		return nil, nil, err
+	}
+	handler := created.(outbound.Handler)
+	if err := handler.Start(); err != nil {
+		_ = handler.Close()
+		return nil, nil, err
+	}
+	return func(ctx context.Context, dest xnet.Destination) (net.Conn, error) {
+		ctx = context.WithValue(ctx, probeHandlerKey{}, handler)
+		return core.Dial(session.SetForcedOutboundTagToContext(ctx, probeTag), active, dest)
+	}, func() { _ = handler.Close() }, nil
 }

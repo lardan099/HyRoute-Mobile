@@ -252,6 +252,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	outbounds := []any{
 		map[string]any{"tag": blockTag, "protocol": "blackhole"},
 		map[string]any{"tag": directTag, "protocol": "freedom"},
+		map[string]any{"tag": probeTag, "protocol": "blackhole"},
 	}
 	if p.splitDNS != nil {
 		outbounds = append(outbounds, map[string]any{"tag": splitDNSTag, "protocol": "blackhole"})

@@ -232,8 +232,18 @@ func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {
 		}
 		state.ServerGroups = []serverGroup{{ID: "group", Name: "First hop", Primary: []string{"primary"}, Reserve: ordered[2]}}
 		state.Settings.Routing = json.RawMessage(`{"defaultAction":"tunnel","viaProfiles":{"hy2":"group"}}`)
-		var journal *trafficJournal
-		assertVPNStateRoundTripWithLog(t, encodeNetworkTestState(t, state), endpoint.URL, &journal)
+		journal := assertVPNStateRoundTripWithLog(t, encodeNetworkTestState(t, state), endpoint.URL, func(active *core.Instance) {
+			probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer probe.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			status, _ := (probeTarget{node: candidates[ordered[2]].node}).measure(ctx, probe.URL, active)
+			if status != "ok" {
+				t.Fatalf("test via temporary outbound in active VPN: %s", status)
+			}
+		})
 		trace := journal.snapshot()
 		var events []trafficEvent
 		if err := json.Unmarshal([]byte(trace), &events); err != nil {
@@ -292,7 +302,7 @@ func assertVPNStateRoundTrip(t *testing.T, raw, target string) {
 	assertVPNStateRoundTripWithLog(t, raw, target, nil)
 }
 
-func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, journal **trafficJournal) {
+func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, before func(*core.Instance)) *trafficJournal {
 	t.Helper()
 	plan, err := NewVPNPlan(raw, false)
 	if err != nil {
@@ -311,8 +321,7 @@ func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, journal **
 	if strings.Contains(fmt.Sprint(clientConfig.xray["routing"]), "bittorrent") {
 		t.Fatal("subscription routing must not override the user")
 	}
-	if journal != nil {
-		*journal = clientConfig.traffic
+	if before != nil {
 		clientConfig.traffic.enabled.Store(true)
 	}
 	engine, err := clientConfig.start(context.Background(), nil)
@@ -320,6 +329,9 @@ func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, journal **
 		t.Fatal(err)
 	}
 	defer engine.Close()
+	if before != nil {
+		before(engine)
+	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
 			ctx = xctx.ContextWithID(ctx, 17)
@@ -340,4 +352,5 @@ func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, journal **
 	if err != nil || string(body) != "hyroute-vpn-test" {
 		t.Fatalf("request did not reach the VPN egress: %v", err)
 	}
+	return clientConfig.traffic
 }
