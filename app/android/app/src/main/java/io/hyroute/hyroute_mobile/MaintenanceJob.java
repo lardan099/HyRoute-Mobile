@@ -61,8 +61,9 @@ public final class MaintenanceJob extends JobService {
     private static boolean refreshGeo(Context context, Maintenance task) {
         try {
             Mobile.configureGeo(new File(context.getNoBackupFilesDir(), "geo").getPath());
-            if (task == null) Mobile.autoUpdateGeo();
-            else task.updateGeo();
+            String state = new ClientStore(context.getNoBackupFilesDir()).read();
+            if (task == null) Mobile.autoUpdateGeoForState(state);
+            else task.updateGeoForState(state);
             return true;
         } catch (Exception error) {
             return false;

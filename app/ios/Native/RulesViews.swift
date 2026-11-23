@@ -172,7 +172,7 @@ struct RulesPage: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("rules-chains")
-        .disabled(client.state.profiles.count < 2 && routing.viaProfiles.isEmpty)
+        .disabled(client.state.chainProfiles.count < 2 && routing.viaProfiles.isEmpty)
 
         NavigationLink {
           GeoCatalog(client: client)
@@ -182,6 +182,15 @@ struct RulesPage: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("rules-geo")
+
+        NavigationLink {
+          SplitDNSPage(client: client)
+        } label: {
+          HyRow(title: "Раздельный DNS", symbol: "arrow.triangle.branch",
+                detail: client.state.settings.splitDNS == nil ? "Выключен" : "Включён")
+            .hyCard(padding: 12)
+        }
+        .buttonStyle(.plain)
       }
       .padding(16)
     }
@@ -189,7 +198,7 @@ struct RulesPage: View {
 
   private var chainSummary: String {
     if !brokenChains.isEmpty { return "Недоступных связей: \(brokenChains.count)" }
-    if routing.viaProfiles.isEmpty { return client.state.profiles.count < 2 ? "Нужно два VPN-профиля" : "Цепочки не настроены" }
+    if routing.viaProfiles.isEmpty { return client.state.chainProfiles.count < 2 ? "Нужно два VPN-профиля" : "Цепочки не настроены" }
     return "Связей: \(routing.viaProfiles.count)"
   }
 
@@ -392,7 +401,7 @@ private struct ChainEditor: View {
   @State private var entry = ""
   @State private var saveFailed = false
 
-  private var profiles: [VPNProfile] { client.state.profiles }
+  private var profiles: [VPNProfile] { client.state.chainProfiles }
   private var available: Set<String> { Set(profiles.map(\.id)) }
   private var routing: Routing { client.state.settings.routing }
   private var unavailable: [String] { routing.unavailableChainExits(available: available) }
@@ -473,7 +482,8 @@ private struct ChainEditor: View {
       }
     }
     .onAppear {
-      selectExit(client.state.selected?.id ?? profiles.first?.id ?? "")
+      let selected = client.state.selected?.id
+      selectExit(profiles.first { $0.id == selected }?.id ?? profiles.first?.id ?? "")
     }
   }
 
@@ -619,7 +629,7 @@ private struct GeoCatalog: View {
       tags = try await client.geoTags(update: update)
       if select == nil { sources = try await client.geoSources() }
     } catch {
-      self.error = update ? "Не удалось скачать базы. Проверьте интернет." : "Не удалось прочитать базы правил."
+      self.error = update ? "Не удалось обновить базы. Проверьте источник и наличие используемых категорий." : "Не удалось прочитать базы правил."
     }
   }
 }

@@ -1,6 +1,12 @@
 #import "HyRouteBridge.h"
 #import <HyRouteCore/HyRouteCore.h>
 
+NSString * _Nullable HyRouteRecoveryState(NSString *state) {
+    NSError *error = nil;
+    NSString *snapshot = MobileVPNRecoveryState(state, &error);
+    return error == nil ? snapshot : nil;
+}
+
 NSString * _Nullable HyRouteStateView(NSString *state) {
     NSError *error = nil;
     NSString *view = MobileClientStateView(state, &error);
@@ -32,6 +38,13 @@ NSString * _Nullable HyRouteChangeRoutingProfile(NSString *state, NSString *oper
     return error == nil ? updated : nil;
 }
 
+NSString * _Nullable HyRouteChangeServerGroup(NSString *state, NSString *groupID, NSString *definition, NSString * _Nullable * _Nonnull issue) {
+    NSError *error = nil;
+    NSString *updated = MobileChangeServerGroup(state, groupID, definition, &error);
+    *issue = error.localizedDescription;
+    return error == nil ? updated : nil;
+}
+
 NSString * _Nullable HyRouteCheckClientRoute(NSString *state, NSString *address, NSString *ip, NSString *transport, NSString * _Nullable * _Nonnull issue) {
     NSError *error = nil;
     NSString *route = MobileCheckClientRoute(state, address, ip, transport, @"", NO, &error);
@@ -59,9 +72,9 @@ NSString * _Nullable HyRouteRefreshWithMaintenance(NSObject *maintenance, NSStri
     return error == nil ? updated : nil;
 }
 
-BOOL HyRouteUpdateGeoWithMaintenance(NSObject *maintenance) {
+BOOL HyRouteUpdateGeoWithMaintenance(NSObject *maintenance, NSString *state) {
     NSError *error = nil;
-    return [(MobileMaintenance *)maintenance updateGeo:&error];
+    return [(MobileMaintenance *)maintenance updateGeoForState:state error:&error];
 }
 
 void HyRouteConfigureGeo(NSString *directory) {
@@ -77,6 +90,16 @@ NSString * _Nullable HyRouteGeoTags(void) {
 BOOL HyRouteUpdateGeo(void) {
     NSError *error = nil;
     return MobileUpdateGeo(&error);
+}
+
+BOOL HyRouteUpdateGeoForState(NSString *state) {
+    NSError *error = nil;
+    return MobileUpdateGeoForState(state, &error);
+}
+
+BOOL HyRouteAutoUpdateGeoForState(NSString *state) {
+    NSError *error = nil;
+    return MobileAutoUpdateGeoForState(state, &error);
 }
 
 BOOL HyRouteAutoUpdateGeo(void) {
@@ -98,6 +121,11 @@ BOOL HyRouteSetGeoSource(NSString *kind, NSString *address) {
 BOOL HyRouteImportGeoFile(NSString *kind, NSString *path) {
     NSError *error = nil;
     return MobileImportGeoFile(kind, path, &error);
+}
+
+BOOL HyRouteImportGeoFileForState(NSString *kind, NSString *path, NSString *state) {
+    NSError *error = nil;
+    return MobileImportGeoFileForState(kind, path, state, &error);
 }
 
 NSString *HyRouteUnavailableGeo(NSString *state) {

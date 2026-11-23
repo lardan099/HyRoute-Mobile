@@ -36,6 +36,12 @@ actor NativeCore {
 
   func vpnState() throws -> String { try store.read() }
 
+  func prepareRecovery() throws {
+    try VPNStorage.saveRecoveryState(store.read(), create: true)
+  }
+
+  func clearRecovery() throws { try VPNStorage.clearRecoveryState() }
+
   func unavailableGeo(in snapshot: String) -> [String] {
     let raw = HyRouteUnavailableGeo(snapshot)
     guard let categories = try? JSONDecoder().decode([String].self, from: Data(raw.utf8)) else { return [] }
@@ -103,6 +109,15 @@ actor NativeCore {
     return try persist(updated)
   }
 
+  func changeServerGroup(id: String, group: ServerGroup?) throws -> ClientState {
+    let definition = try group.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) } ?? ""
+    var issue: NSString?
+    guard let result = HyRouteChangeServerGroup(try store.read(), id, definition, &issue) else {
+      throw ClientMessage(text: (issue as String?) ?? "Не удалось сохранить группу.")
+    }
+    return try persist(result)
+  }
+
   func checkRoute(_ address: String, ip: String, transport: String) throws -> CheckedRoute {
     var issue: NSString?
     guard let result = HyRouteCheckClientRoute(try routingState(), address, ip, transport, &issue) else {
@@ -122,6 +137,11 @@ actor NativeCore {
     guard let raw else { throw CoreError.invalidResult }
     let state = try view(raw)
     try store.write(raw)
+    do { try VPNStorage.saveRecoveryState(raw, create: false) }
+    catch {
+      try? VPNStorage.clearRecoveryState()
+      record("vpn_recovery_storage_error")
+    }
     return state
   }
 
@@ -147,6 +167,8 @@ final class Client: ObservableObject {
   @Published private(set) var busy = false
   @Published private(set) var vpnBusy = false
   @Published private(set) var vpnStatus: NEVPNStatus = .invalid
+  @Published private(set) var autoReconnect = UserDefaults.standard.bool(forKey: "vpnAutoReconnect")
+  @Published private(set) var blockOnDrop = UserDefaults.standard.bool(forKey: "vpnBlockOnDrop")
   @Published var error: String?
 
   func load() async {
@@ -166,6 +188,13 @@ final class Client: ObservableObject {
     if vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting {
       finishStartup()
       stoppingVPN = true
+      do {
+        if manager?.isOnDemandEnabled == true { try await disarmRecovery() }
+      } catch {
+        stoppingVPN = false
+        self.error = "Не удалось отключить автовосстановление VPN. Повторите попытку."
+        return
+      }
       (manager?.connection as? NETunnelProviderSession)?.stopTunnel()
       await core.record("vpn_stop")
       syncVPNStatus()
@@ -201,6 +230,8 @@ final class Client: ObservableObject {
     } catch CoreError.missingTunnelExtension {
       await core.record("vpn_provider_missing")
       error = "В установленной сборке нет Packet Tunnel. При подписи IPA сохраните VPN-расширение."
+    } catch let message as ClientMessage {
+      error = message.text
     } catch {
       await logVPNError(error, event: "vpn_system_error")
       self.error = "iOS отклонила запуск VPN. Код \((error as NSError).code). Подробности в журнале."
@@ -210,15 +241,72 @@ final class Client: ObservableObject {
 
   private func requestTunnel(_ snapshot: String) async throws {
     let current = try await vpnManager()
-    if !current.isEnabled {
-      await core.record("vpn_permission")
+    guard let configuration = current.protocolConfiguration as? NETunnelProviderProtocol else {
+      throw CoreError.invalidResult
+    }
+    if autoReconnect {
+      do { try await core.prepareRecovery() }
+      catch { throw ClientMessage(text: "Нет доступа к общему хранилищу VPN. Проверьте разрешения App Groups при подписи IPA.") }
+    }
+    let block = autoReconnect && blockOnDrop
+    if !current.isEnabled || current.isOnDemandEnabled != autoReconnect || configuration.includeAllNetworks != block {
+      if !current.isEnabled { await core.record("vpn_permission") }
       current.isEnabled = true
+      current.isOnDemandEnabled = autoReconnect
+      current.onDemandRules = autoReconnect ? [NEOnDemandRuleConnect()] : []
+      configuration.includeAllNetworks = block
+      configuration.providerConfiguration = ["recovery": autoReconnect]
+      current.protocolConfiguration = configuration
       try await current.saveToPreferences()
       try await current.loadFromPreferences()
     }
     manager = current
     guard let session = current.connection as? NETunnelProviderSession else { throw CoreError.invalidResult }
-    try session.startTunnel(options: ["state": snapshot as NSString])
+    if ![.connecting, .connected, .reasserting].contains(session.status) {
+      try session.startTunnel(options: ["state": snapshot as NSString])
+    }
+  }
+
+  var canEditVPNRecovery: Bool {
+    !vpnBusy && !stoppingVPN && (vpnStatus == .invalid || vpnStatus == .disconnected)
+  }
+
+  func setAutoReconnect(_ enabled: Bool) async {
+    guard canEditVPNRecovery else { return }
+    vpnBusy = true
+    defer { vpnBusy = false }
+    if enabled && !VPNStorage.canRecover {
+      error = "Нет доступа к App Groups. Сохраните разрешение VPN-расширения при подписи IPA."
+      return
+    }
+    if !enabled {
+      do { try await disarmRecovery() }
+      catch {
+        self.error = "Не удалось отключить автовосстановление VPN. Повторите попытку."
+        return
+      }
+    }
+    autoReconnect = enabled
+    UserDefaults.standard.set(enabled, forKey: "vpnAutoReconnect")
+  }
+
+  func setBlockOnDrop(_ enabled: Bool) {
+    guard canEditVPNRecovery, autoReconnect else { return }
+    blockOnDrop = enabled
+    UserDefaults.standard.set(enabled, forKey: "vpnBlockOnDrop")
+  }
+
+  private func disarmRecovery() async throws {
+    let current = try await vpnManager()
+    if current.isOnDemandEnabled {
+      current.isOnDemandEnabled = false
+      current.onDemandRules = []
+      try await current.saveToPreferences()
+      try await current.loadFromPreferences()
+    }
+    manager = current
+    do { try await core.clearRecovery() }
+    catch { await core.record("vpn_recovery_storage_error") }
   }
 
   func journal() async throws -> [String] { try await core.journal() }
@@ -422,6 +510,20 @@ final class Client: ObservableObject {
     return await save(next, reportError: reportError)
   }
 
+  func saveSplitDNS(_ settings: SplitDNS?) async -> Bool {
+    var next = state.settings
+    next.splitDNS = settings
+    return await save(next, reportError: false)
+  }
+
+  func changeServerGroup(id: String, group: ServerGroup?) async throws {
+    guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
+    busy = true
+    defer { busy = false }
+    state = try await core.changeServerGroup(id: id, group: group)
+    stateRevision += 1
+  }
+
   func changeRoutingProfile(_ operation: String, id: String = "", name: String = "") async throws {
     guard !busy else { throw ClientMessage(text: "Дождитесь окончания сохранения.") }
     busy = true
@@ -435,8 +537,9 @@ final class Client: ObservableObject {
   }
 
   func geoTags(update: Bool) async throws -> [String] {
-    try await Task.detached(priority: .utility) {
-      if update && !HyRouteUpdateGeo() { throw CoreError.invalidResult }
+    let snapshot = update ? try await core.vpnState() : ""
+    return try await Task.detached(priority: .utility) {
+      if update && !HyRouteUpdateGeoForState(snapshot) { throw CoreError.invalidResult }
       guard let tags = HyRouteGeoTags() else { throw CoreError.invalidResult }
       return try JSONDecoder().decode([String].self, from: Data(tags.utf8))
     }.value
@@ -454,13 +557,14 @@ final class Client: ObservableObject {
   }
 
   func importGeoFile(_ kind: String, file: URL) async -> Bool {
-    await Task.detached(priority: .utility) {
+    guard let snapshot = try? await core.vpnState() else { return false }
+    return await Task.detached(priority: .utility) {
       let scoped = file.startAccessingSecurityScopedResource()
       defer { if scoped { file.stopAccessingSecurityScopedResource() } }
       var coordinationError: NSError?
       var installed = false
       NSFileCoordinator().coordinate(readingItemAt: file, options: [], error: &coordinationError) { item in
-        installed = HyRouteImportGeoFile(kind, item.path)
+        installed = HyRouteImportGeoFileForState(kind, item.path, snapshot)
       }
       return coordinationError == nil && installed
     }.value
@@ -475,8 +579,8 @@ final class Client: ObservableObject {
       state = snapshot
       stateRevision += 1
     }
-    if !Task.isCancelled {
-      _ = await Task.detached(priority: .utility) { HyRouteAutoUpdateGeo() }.value
+    if !Task.isCancelled, let snapshot = try? await core.vpnState() {
+      _ = await Task.detached(priority: .utility) { HyRouteAutoUpdateGeoForState(snapshot) }.value
     }
   }
 

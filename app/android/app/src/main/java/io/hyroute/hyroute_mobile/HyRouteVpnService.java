@@ -33,6 +33,7 @@ import mobile.VPNSession;
 public final class HyRouteVpnService extends VpnService {
     private static final String CHANNEL = "hyroute-vpn";
     static final String STOP = "io.hyroute.vpn.STOP";
+    static final String START = "io.hyroute.vpn.START";
     private static final int NOTIFICATION = 601;
     private static final AtomicReference<String> STATUS = new AtomicReference<>("off");
 
@@ -67,11 +68,20 @@ public final class HyRouteVpnService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null || STOP.equals(intent.getAction())) {
+        String action = intent == null ? null : intent.getAction();
+        if (STOP.equals(action)) {
             requestStop();
             return START_NOT_STICKY;
         }
         if (started) return START_NOT_STICKY;
+        if (!START.equals(action)) {
+            if (VpnService.prepare(this) != null) {
+                stopSelf(startId);
+                return START_NOT_STICKY;
+            }
+            STATUS.set("starting");
+            record("vpn_system_restart");
+        }
         started = true;
         try {
             startForeground(NOTIFICATION, notification("Подключение VPN"));

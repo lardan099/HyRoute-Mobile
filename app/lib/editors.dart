@@ -190,7 +190,7 @@ class _GeoCatalogDialogState extends State<GeoCatalogDialog> {
       if (mounted) {
         setState(
           () => _error = update
-              ? 'Не удалось обновить базы правил. Проверьте интернет.'
+              ? 'Не удалось обновить базы. Проверьте источник и наличие используемых категорий.'
               : 'Не удалось прочитать базы правил.',
         );
       }

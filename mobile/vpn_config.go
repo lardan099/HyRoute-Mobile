@@ -76,6 +76,12 @@ func (r *IOSVPNPlanResult) GeoCategories() string { return r.geoCategories }
 type vpnProfile struct {
 	profile hysteria.Profile
 	tag     string
+	group   []groupMember
+}
+
+type groupMember struct {
+	profile hysteria.Profile
+	reserve bool
 }
 
 // VPNPlan is an immutable snapshot of the selected profiles and local rules.
@@ -87,6 +93,7 @@ type VPNPlan struct {
 	appScope string
 	packages []string
 	android  bool
+	splitDNS *splitDNSSettings
 }
 
 // NewVPNPlan validates the saved selection, rules and app scope before a VPN
@@ -97,6 +104,9 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 		return nil, errVPNState
 	}
 	settings := state.Settings
+	if err := settings.SplitDNS.normalize(); err != nil {
+		return nil, errVPNRules
+	}
 	cfg := routingConfig{Config: rules.Config{DefaultAction: rules.Tunnel}}
 	if len(settings.Routing) > 0 {
 		if err := json.Unmarshal(settings.Routing, &cfg); err != nil {
@@ -104,6 +114,7 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 		}
 	}
 	all := make(map[string]hysteria.Profile)
+	groups := make(map[string]serverGroup)
 	var first, firstGroup string
 	for _, item := range state.Subscriptions {
 		for _, profile := range item.Snapshot.Servers {
@@ -119,8 +130,19 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 			}
 		}
 	}
-	if !android && all[settings.Selected].ID == "" {
-		// iOS displays the first available group, then the first server, when
+	singles := state.singleServers()
+	for _, group := range state.ServerGroups {
+		if group.preview(singles).Missing {
+			continue
+		}
+		groups[group.ID] = group
+		all[group.ID] = hysteria.Profile{ID: group.ID, Name: group.Name}
+		if firstGroup == "" {
+			firstGroup = group.ID
+		}
+	}
+	if all[settings.Selected].ID == "" {
+		// The apps display the first available group, then the first server, when
 		// the saved selection disappears during a subscription refresh.
 		settings.Selected = firstGroup
 		if settings.Selected == "" {
@@ -129,6 +151,9 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 	}
 	if all[settings.Selected].ID == "" {
 		return nil, errVPNProfile
+	}
+	if err := state.validateGroupChains(cfg.ViaProfiles); err != nil {
+		return nil, errVPNRules
 	}
 	rawRules, err := json.Marshal(cfg)
 	if err != nil {
@@ -141,7 +166,7 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 		}
 		return nil, errVPNRules
 	}
-	plan := &VPNPlan{router: router, tags: make(map[string]string), selected: settings.Selected, android: android}
+	plan := &VPNPlan{router: router, tags: make(map[string]string), selected: settings.Selected, android: android, splitDNS: settings.SplitDNS}
 	if android {
 		plan.appScope = settings.AppScope
 		if plan.appScope == "" {
@@ -173,12 +198,27 @@ func NewVPNPlan(raw string, android bool) (*VPNPlan, error) {
 				return err
 			}
 		}
-		if err := profile.Validate(); err != nil {
+		target := vpnProfile{profile: profile}
+		if group, ok := groups[id]; ok {
+			for _, memberID := range group.memberIDs() {
+				member, ok := singles[memberID]
+				if !ok || member.Validate() != nil {
+					continue
+				}
+				if err := add(cfg.ViaProfiles[memberID]); err != nil {
+					continue
+				}
+				target.group = append(target.group, groupMember{profile: member, reserve: memberID == group.Reserve})
+			}
+			if len(target.group) == 0 {
+				return errVPNUnsupported
+			}
+		} else if err := profile.Validate(); err != nil {
 			return errVPNUnsupported
 		}
-		tag := fmt.Sprintf("hyroute-profile-%d", len(plan.profiles))
-		plan.tags[id] = tag
-		plan.profiles = append(plan.profiles, vpnProfile{profile: profile, tag: tag})
+		target.tag = fmt.Sprintf("hyroute-profile-%d", len(plan.profiles))
+		plan.tags[id] = target.tag
+		plan.profiles = append(plan.profiles, target)
 		return nil
 	}
 	if err := add(settings.Selected); err != nil {
@@ -210,6 +250,9 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 		map[string]any{"tag": blockTag, "protocol": "blackhole"},
 		map[string]any{"tag": directTag, "protocol": "freedom"},
 	}
+	if p.splitDNS != nil {
+		outbounds = append(outbounds, map[string]any{"tag": splitDNSTag, "protocol": "blackhole"})
+	}
 	var prefixes []string
 	var balances, routeRules []any
 	var observation *vless.Balance
@@ -226,7 +269,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	for _, target := range p.profiles {
 		profile := target.profile
 		upstream := p.tags[p.router.viaProfiles[profile.ID]]
-		if profile.Balance == nil {
+		if profile.Balance == nil && len(target.group) == 0 {
 			ip := resolveOnce(profile.Host)
 			if !ip.IsValid() {
 				return nil, errors.New("не удалось найти адрес VPN-сервера")
@@ -239,32 +282,39 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 			outbounds = append(outbounds, out)
 			continue
 		}
-		balance := *profile.Balance
-		ips := make([]netip.Addr, len(balance.Nodes))
-		for i, node := range balance.Nodes {
-			ips[i] = resolveOnce(node.Host)
-		}
 		prefix := target.tag + "-node-"
 		tag := target.tag + "-balancer"
-		nodes, config, err := vless.BalanceOutbounds(balance, ips, prefix, tag)
-		if err != nil {
-			return nil, errors.New("не удалось подготовить узлы Автовыбора")
+		var balance vless.Balance
+		if len(target.group) > 0 {
+			nodes, config, err := p.groupOutbounds(target, prefix, tag, resolveOnce)
+			if err != nil {
+				return nil, err
+			}
+			outbounds = append(outbounds, nodes...)
+			balances = append(balances, config)
+		} else {
+			balance = *profile.Balance
+			ips := make([]netip.Addr, len(balance.Nodes))
+			for i, node := range balance.Nodes {
+				ips[i] = resolveOnce(node.Host)
+			}
+			nodes, config, err := vless.BalanceOutbounds(balance, ips, prefix, tag)
+			if err != nil {
+				return nil, errors.New("не удалось подготовить узлы Автовыбора")
+			}
+			if config["fallbackTag"] == nil {
+				config["fallbackTag"] = blockTag
+			}
+			for _, node := range nodes {
+				setDialerProxy(node.(map[string]any), upstream)
+			}
+			outbounds = append(outbounds, nodes...)
+			balances = append(balances, config)
 		}
-		if config["fallbackTag"] == nil {
-			config["fallbackTag"] = blockTag
-		}
-		for _, node := range nodes {
-			setDialerProxy(node.(map[string]any), upstream)
-		}
-		outbounds = append(outbounds, nodes...)
 		outbounds = append(outbounds, map[string]any{
 			"tag": target.tag, "protocol": "loopback", "settings": map[string]any{"inboundTag": tag},
 		})
 		prefixes = append(prefixes, prefix)
-		balances = append(balances, config)
-		if balance.BlockBitTorrent {
-			routeRules = append(routeRules, map[string]any{"type": "field", "inboundTag": []string{tag}, "protocol": []string{"bittorrent"}, "outboundTag": blockTag})
-		}
 		routeRules = append(routeRules, map[string]any{"type": "field", "inboundTag": []string{tag}, "balancerTag": tag})
 		balancers[tag] = true
 		if observation == nil || target.profile.ID == p.selected {
@@ -286,6 +336,37 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 		config["burstObservatory"] = observation.Observatory(prefixes)
 	}
 	return &vpnConfiguration{plan: p, xray: config, balancers: balancers}, nil
+}
+
+func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve func(string) netip.Addr) ([]any, map[string]any, error) {
+	var outbounds []any
+	fallback := blockTag
+	for i, member := range target.group {
+		ip := resolve(member.profile.Host)
+		if !ip.IsValid() {
+			continue
+		}
+		memberTag := fmt.Sprintf("%s%d", prefix, i)
+		if member.reserve {
+			memberTag = target.tag + "-reserve"
+		}
+		out, err := profileOutbound(member.profile, ip, memberTag)
+		if err != nil {
+			continue
+		}
+		setDialerProxy(out, p.tags[p.router.viaProfiles[member.profile.ID]])
+		outbounds = append(outbounds, out)
+		if member.reserve {
+			fallback = memberTag
+		}
+	}
+	if len(outbounds) == 0 {
+		return nil, nil, errors.New("серверы группы недоступны")
+	}
+	return outbounds, map[string]any{
+		"tag": tag, "selector": []string{prefix}, "fallbackTag": fallback,
+		"strategy": map[string]any{"type": "leastPing"},
+	}, nil
 }
 
 func profileOutbound(p hysteria.Profile, ip netip.Addr, tag string) (map[string]any, error) {

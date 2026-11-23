@@ -57,6 +57,41 @@ func CheckKind(kind Kind, path string) error {
 	return nil
 }
 
+// CheckCategories verifies that the staged file still resolves categories in use.
+func CheckCategories(kind Kind, path string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	index, err := buildIndex(path)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		category, attrs := name, []string(nil)
+		if kind == Site {
+			category, attrs = splitAttrs(name)
+		}
+		item, ok := index[category]
+		if ok {
+			data, err := readSpan(path, item)
+			if err != nil {
+				return err
+			}
+			if kind == Site {
+				set, _, err := decodeSite(data, attrs)
+				ok = err == nil && set.Len() > 0
+			} else {
+				set, err := decodeIP(data)
+				ok = err == nil && set.Len() > 0
+			}
+		}
+		if !ok {
+			return fmt.Errorf("в новой базе нет категории %s:%s из сохранённых правил", kind.Prefix(), name)
+		}
+	}
+	return nil
+}
+
 // maxCategory bounds one category of a file (buildIndex).
 const maxCategory = 128 << 20
 

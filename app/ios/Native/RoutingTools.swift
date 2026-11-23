@@ -1,5 +1,175 @@
 import SwiftUI
 
+struct ServerGroupsPage: View {
+  @ObservedObject var client: Client
+  @State private var adding = false
+
+  private var servers: [VPNProfile] {
+    var seen = Set<String>()
+    return client.state.profiles.filter { $0.balance != true && seen.insert($0.id).inserted }
+  }
+
+  var body: some View {
+    List {
+      Button { adding = true } label: { Label("Создать группу", systemImage: "plus") }
+        .disabled(servers.count < 2)
+      if servers.count < 2 { Text("Добавьте два отдельных сервера.").foregroundStyle(HyStyle.muted) }
+      ForEach(client.state.serverGroups ?? []) { group in
+        NavigationLink {
+          ServerGroupEditor(client: client, servers: servers, group: group)
+        } label: {
+          HyRow(title: group.name, symbol: "server.rack", detail: "Основных: \(group.primary.count) · резервный: 1")
+        }
+      }
+    }
+    .hyList()
+    .navigationTitle("Группы серверов")
+    .navigationBarTitleDisplayMode(.inline)
+    .sheet(isPresented: $adding) {
+      NavigationStack { ServerGroupEditor(client: client, servers: servers) }
+    }
+  }
+}
+
+private struct ServerGroupEditor: View {
+  @Environment(\.dismiss) private var dismiss
+  @ObservedObject var client: Client
+  let servers: [VPNProfile]
+  let id: String
+  @State private var name: String
+  @State private var primary: Set<String>
+  @State private var reserve: String
+  @State private var error: String?
+  @State private var confirmingDelete = false
+
+  init(client: Client, servers: [VPNProfile], group: ServerGroup? = nil) {
+    self.client = client
+    self.servers = servers
+    id = group?.id ?? ""
+    _name = State(initialValue: group?.name ?? "")
+    _primary = State(initialValue: Set(group?.primary ?? []).intersection(servers.map(\.id)))
+    _reserve = State(initialValue: servers.contains { $0.id == group?.reserve } ? group?.reserve ?? "" : "")
+  }
+
+  var body: some View {
+    Form {
+      TextField("Название группы", text: $name)
+      Section {
+        ForEach(servers) { server in
+          Toggle(server.title, isOn: Binding(get: { primary.contains(server.id) }, set: { enabled in
+            if enabled { primary.insert(server.id) } else { primary.remove(server.id) }
+          }))
+          .disabled(reserve == server.id)
+        }
+      } header: {
+        Text("Основные серверы")
+      } footer: {
+        Text("HyRoute выбирает доступный сервер с наименьшей задержкой.")
+      }
+      Picker("Резервный сервер", selection: $reserve) {
+        Text("Выбрать").tag("")
+        ForEach(servers.filter { !primary.contains($0.id) }) { Text($0.title).tag($0.id) }
+      }
+      if let error { Text(error).foregroundStyle(HyStyle.failure) }
+      if !id.isEmpty {
+        Button("Удалить группу", role: .destructive) { confirmingDelete = true }
+      }
+    }
+    .hyList()
+    .disabled(client.busy)
+    .navigationTitle(id.isEmpty ? "Новая группа" : "Настройки группы")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      if id.isEmpty {
+        ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
+      }
+      ToolbarItem(placement: .confirmationAction) {
+        Button("Сохранить") {
+          let selected = servers.map(\.id).filter { primary.contains($0) }
+          Task { await save(ServerGroup(name: name, primary: selected, reserve: reserve)) }
+        }
+        .disabled(client.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || primary.isEmpty || reserve.isEmpty)
+      }
+    }
+    .confirmationDialog("Удалить группу?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+      Button("Удалить", role: .destructive) { Task { await save(nil) } }
+    }
+  }
+
+  private func save(_ group: ServerGroup?) async {
+    do {
+      try await client.changeServerGroup(id: id, group: group)
+      dismiss()
+    } catch { self.error = error.localizedDescription }
+  }
+}
+
+struct SplitDNSPage: View {
+  @Environment(\.dismiss) private var dismiss
+  @ObservedObject var client: Client
+  @State private var enabled: Bool
+  @State private var tunnel: String
+  @State private var direct: String
+  @State private var domains: String
+  @State private var saveFailed = false
+
+  init(client: Client) {
+    self.client = client
+    let settings = client.state.settings.splitDNS
+    _enabled = State(initialValue: settings != nil)
+    _tunnel = State(initialValue: settings?.tunnel ?? "https://1.1.1.1/dns-query")
+    _direct = State(initialValue: settings?.direct ?? "https://8.8.8.8/dns-query")
+    _domains = State(initialValue: settings?.domains.joined(separator: "\n") ?? "")
+  }
+
+  var body: some View {
+    Form {
+      Toggle("Включить", isOn: $enabled)
+      if enabled {
+        Section {
+          TextField("DNS через VPN", text: $tunnel)
+          TextField("DNS напрямую", text: $direct)
+        } footer: {
+          Text("Укажите HTTPS-адреса с IP. Сертификат сервера должен поддерживать этот IP.")
+        }
+        .keyboardType(.URL)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        Section {
+          TextEditor(text: $domains)
+            .frame(minHeight: 84)
+            .accessibilityLabel("Домены для DNS напрямую")
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        } header: {
+          Text("Домены для DNS напрямую")
+        } footer: {
+          Text("Один на строку. Действует и для поддоменов.")
+        }
+      }
+      if saveFailed { Text("Проверьте адреса DNS и список доменов.").foregroundStyle(HyStyle.failure) }
+    }
+    .hyList()
+    .disabled(client.busy)
+    .navigationTitle("Раздельный DNS")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .confirmationAction) {
+        Button("Сохранить") {
+          let names = domains.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+          let settings = enabled ? SplitDNS(tunnel: tunnel, direct: direct, domains: names) : nil
+          Task {
+            if await client.saveSplitDNS(settings) { dismiss() }
+            else { saveFailed = true }
+          }
+        }
+        .disabled(client.busy)
+      }
+    }
+  }
+}
+
 struct RoutingProfilesPage: View {
   @ObservedObject var client: Client
   @State private var editing: ProfileNameDraft?

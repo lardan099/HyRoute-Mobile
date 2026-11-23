@@ -45,6 +45,15 @@ func TestCustomGeoFilesAreValidatedAndPinned(t *testing.T) {
 	if err := ImportGeoFile("geoip", site); err == nil {
 		t.Fatal("GeoSite file accepted as GeoIP")
 	}
+	replacement := filepath.Join(input, "replacement.dat")
+	if err := os.WriteFile(replacement, category("OTHER", field(2, []byte("other.example.test"))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"settings":{"routing":{"rules":[]}},"routingProfiles":[{"id":"stored","name":"Stored",
+		"routing":{"rules":[{"domains":["geosite:app"],"action":"direct"}]}}]}`
+	if err := ImportGeoFileForState("geosite", replacement, state); err == nil || !strings.Contains(err.Error(), "geosite:app") {
+		t.Fatalf("replacement should preserve the category referenced by dormant rules: %v", err)
+	}
 	raw, err := GeoSettings()
 	var settings geoSettings
 	if err != nil || json.Unmarshal([]byte(raw), &settings) != nil || settings.Site != geoLocalFile || settings.IP != geoLocalFile {

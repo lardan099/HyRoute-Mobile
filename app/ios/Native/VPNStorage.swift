@@ -13,6 +13,42 @@ enum VPNStorage {
     sharedDirectory?.appendingPathComponent("tunnel-journal.json").path ?? ""
   }
 
+  private static var recoveryDirectory: URL? {
+    sharedDirectory?.appendingPathComponent("VPN Recovery", isDirectory: true)
+  }
+
+  private static var recoveryFile: URL? {
+    recoveryDirectory?.appendingPathComponent("state.json")
+  }
+
+  static var canRecover: Bool { recoveryDirectory != nil }
+
+  static func recoveryState() -> String? {
+    guard let file = recoveryFile else { return nil }
+    return try? String(contentsOf: file, encoding: .utf8)
+  }
+
+  static func saveRecoveryState(_ raw: String, create: Bool) throws {
+    guard var directory = recoveryDirectory, let file = recoveryFile else {
+      if !create { return }
+      throw CocoaError(.fileNoSuchFile)
+    }
+    let files = FileManager.default
+    if !create && !files.fileExists(atPath: file.path) { return }
+    guard let snapshot = HyRouteRecoveryState(raw) else { throw CocoaError(.fileWriteUnknown) }
+    try files.createDirectory(at: directory, withIntermediateDirectories: true)
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try directory.setResourceValues(values)
+    try Data(snapshot.utf8).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+  }
+
+  static func clearRecoveryState() throws {
+    guard let file = recoveryFile else { return }
+    do { try FileManager.default.removeItem(at: file) }
+    catch let error as CocoaError where error.code == .fileNoSuchFile { }
+  }
+
   static func prepareGeodata(legacy: URL) throws -> URL {
     guard let directory = sharedGeodata else { return legacy }
     let files = FileManager.default

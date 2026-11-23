@@ -41,9 +41,34 @@ func TestVPNRoutesThroughEmbeddedVLESSBalance(t *testing.T) {
 		"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow","ip":["127.0.0.1/32"]}]}}]}`, port, credential)
 	startVPNTestServer(t, serverConfig)
 	assertVPNRoundTrip(t, hysteria.Profile{ID: "auto", Name: "Auto", Protocol: hysteria.ProtoVLESS,
-		Balance: &vless.Balance{Strategy: "leastPing", FallbackNode: 1, Nodes: []vless.Node{{
+		Balance: &vless.Balance{Strategy: "leastPing", FallbackNode: 1, BlockBitTorrent: true, Nodes: []vless.Node{{
 			Host: "127.0.0.1", Port: port, Settings: vless.Settings{ID: credential},
 		}}}}, endpoint.URL)
+	state := clientState{Subscriptions: []savedSubscription{{URL: "https://example.test/secret", Snapshot: importedSubscription{
+		Servers: []hysteria.Profile{
+			{ID: "primary", Host: "primary.invalid", Ports: "443", Auth: "unresolved"},
+			{ID: "reserve", Host: "127.0.0.1", Ports: fmt.Sprint(port), Protocol: hysteria.ProtoVLESS, VLESS: vless.Settings{ID: credential}},
+		},
+	}}}}
+	raw := encodeNetworkTestState(t, state)
+	updated, err := ChangeServerGroup(raw, "", `{"name":"Group","primary":["primary"],"reserve":"reserve"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = decodeClientState(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Settings.Selected = state.ServerGroups[0].ID
+	raw = encodeNetworkTestState(t, state)
+	if _, err := ChangeServerGroup(raw, state.Settings.Selected, ""); err == nil {
+		t.Fatal("selected group was deleted")
+	}
+	recovery, err := VPNRecoveryState(raw)
+	if err != nil || strings.Contains(recovery, "example.test/secret") {
+		t.Fatalf("recovery must omit subscription URL: %v", err)
+	}
+	assertVPNStateRoundTrip(t, recovery, endpoint.URL)
 }
 
 func TestIOSVPNPlanUsesDisplayedProfileAfterSelectedServerDisappears(t *testing.T) {
@@ -183,22 +208,36 @@ func assertVPNRoundTrip(t *testing.T, profile hysteria.Profile, target string) {
 	state := clientState{Subscriptions: []savedSubscription{{Snapshot: importedSubscription{
 		Servers: []hysteria.Profile{profile},
 	}}}, Settings: clientSettings{Selected: profile.ID}}
+	assertVPNStateRoundTrip(t, encodeNetworkTestState(t, state), target)
+}
+
+func encodeNetworkTestState(t *testing.T, state clientState) string {
+	t.Helper()
 	raw, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := NewVPNPlan(string(raw), false)
+	return string(raw)
+}
+
+func assertVPNStateRoundTrip(t *testing.T, raw, target string) {
+	t.Helper()
+	plan, err := NewVPNPlan(raw, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clientConfig, err := plan.configuration(context.Background(), false, func(_ context.Context, host string) netip.Addr {
-		return netip.MustParseAddr(host)
+		ip, _ := netip.ParseAddr(host)
+		return ip
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if clientConfig.xray["inbounds"] != nil {
 		t.Fatal("unexpected client listener")
+	}
+	if strings.Contains(fmt.Sprint(clientConfig.xray["routing"]), "bittorrent") {
+		t.Fatal("subscription routing must not override the user")
 	}
 	engine, err := clientConfig.start(context.Background(), nil)
 	if err != nil {

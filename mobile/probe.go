@@ -53,6 +53,24 @@ func startProbe(raw, scope, id, journal, targetURL string) (*ProbeBatch, error) 
 	}
 	var targets []probeTarget
 	var results []probeResult
+	if len(state.ServerGroups) > 0 {
+		servers := state.singleServers()
+		seen := make(map[string]bool)
+		for _, group := range state.ServerGroups {
+			if !(scope == "profile" && id == group.ID || scope == "subscription" && id == groupSubscriptionID) {
+				continue
+			}
+			for _, member := range group.memberIDs() {
+				profile, ok := servers[member]
+				if !ok || seen[member] {
+					continue
+				}
+				seen[member] = true
+				targets = append(targets, probeTarget{profile: profile})
+				results = append(results, probeResult{ProfileID: group.ID, Name: profile.Name, Host: profile.Host, Status: "pending"})
+			}
+		}
+	}
 	for _, item := range state.Subscriptions {
 		if scope == "subscription" && item.ID != id {
 			continue

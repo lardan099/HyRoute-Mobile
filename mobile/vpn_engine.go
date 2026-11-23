@@ -101,6 +101,13 @@ func init() {
 		}
 		return &vpnFlowRouter{Router: delegate.(routing.Router), vpnContextValue: state}, nil
 	}))
+	common.Must(common.RegisterConfig((*wrapperspb.StringValue)(nil), func(ctx context.Context, raw any) (any, error) {
+		state, ok := ctx.Value(vpnContextKey{}).(vpnContextValue)
+		if !ok || state.configuration.plan.splitDNS == nil || raw.(*wrapperspb.StringValue).Value != splitDNSTag {
+			return nil, errors.New("missing HyRoute DNS configuration")
+		}
+		return newSplitDNSProxy(ctx, state.configuration.plan), nil
+	}))
 	common.Must(internet.RegisterDialerController(func(_, _ string, conn syscall.RawConn) error {
 		platform := vpnRuntime.sockets.Load()
 		if platform == nil {
@@ -190,6 +197,11 @@ func (p *vpnConfiguration) start(ctx context.Context, hooks VPNPlatform) (*core.
 			config.App[i] = serial.ToTypedMessage(wrapperspb.Bytes(feature.Value))
 		}
 	}
+	for _, outbound := range config.Outbound {
+		if outbound.Tag == splitDNSTag {
+			outbound.ProxySettings = serial.ToTypedMessage(wrapperspb.String(splitDNSTag))
+		}
+	}
 	ctx = context.WithValue(ctx, vpnContextKey{}, vpnContextValue{p, hooks})
 	instance, err := core.NewWithContext(ctx, config)
 	if err != nil {
@@ -259,6 +271,9 @@ func (r *vpnFlowRouter) route(ctx routing.Context) string {
 	}
 	if result.Action == rules.Direct {
 		return directTag
+	}
+	if plan.splitDNS != nil && subject.Dst.Port() == 53 && subject.Dst.Addr().String() == vpnDNS {
+		return splitDNSTag
 	}
 	if tag := plan.tags[result.Profile]; tag != "" {
 		return tag

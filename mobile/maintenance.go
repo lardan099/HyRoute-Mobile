@@ -23,8 +23,10 @@ func (m *Maintenance) RefreshSubscriptions(raw string) (string, error) {
 }
 
 func (m *Maintenance) UpdateGeo() error {
-	return updateGeo(m.ctx, true)
+	return m.UpdateGeoForState("")
 }
+
+func (m *Maintenance) UpdateGeoForState(raw string) error { return updateGeo(m.ctx, true, raw) }
 
 func refreshDueSubscriptions(parent context.Context, raw string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, 45*time.Second)

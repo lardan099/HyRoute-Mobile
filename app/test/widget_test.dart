@@ -212,6 +212,36 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('saves and reopens the split DNS settings', (tester) async {
+    final core = _DiagnosticsTestCore();
+    await _openApp(tester, core: core);
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Правила'));
+    await tester.pumpAndSettle();
+    final dns = find.text('Раздельный DNS');
+    await tester.scrollUntilVisible(dns, 180);
+    await tester.tap(dns);
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Включить');
+    await tester.enterText(
+      find.byType(TextField).last,
+      'example.org\nexample.net',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Сохранить'));
+    await _tap(tester, 'Сохранить');
+    expect(core.state.settings.splitDns?.domains, [
+      'example.org',
+      'example.net',
+    ]);
+    await tester.ensureVisible(dns);
+    await tester.tap(dns);
+    await tester.pumpAndSettle();
+    expect(find.text('example.org\nexample.net'), findsOneWidget);
+    await _tap(tester, 'Включить');
+    await _tap(tester, 'Сохранить');
+    expect(core.state.settings.splitDns, isNull);
+  });
   testWidgets('opens route checking and copies a named rule profile', (
     tester,
   ) async {

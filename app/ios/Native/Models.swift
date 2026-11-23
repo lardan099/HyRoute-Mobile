@@ -60,9 +60,23 @@ struct VPNProfile: Decodable, Identifiable {
   }
 
   var transport: String {
+    if `protocol` == "group" { return "Группа с резервом" }
     if balance == true { return "VLESS · \(balanceStrategy ?? "leastLoad")" }
     return `protocol` == "vless" ? "VLESS" : "Hysteria 2"
   }
+}
+
+struct ServerGroup: Codable, Identifiable {
+  var id: String = ""
+  var name: String
+  var primary: [String]
+  var reserve: String
+}
+
+struct SplitDNS: Codable {
+  var tunnel: String
+  var direct: String
+  var domains: [String]
 }
 
 struct Subscription: Decodable, Identifiable {
@@ -149,6 +163,7 @@ struct ClientSettings: Codable {
   var routing = Routing()
   var appScope: String?
   var appPackages: [String]?
+  var splitDNS: SplitDNS?
 
   init() {}
 
@@ -158,6 +173,7 @@ struct ClientSettings: Codable {
     routing = try values.decodeIfPresent(Routing.self, forKey: .routing) ?? Routing()
     appScope = try values.decodeIfPresent(String.self, forKey: .appScope)
     appPackages = try values.decodeIfPresent([String].self, forKey: .appPackages)
+    splitDNS = try values.decodeIfPresent(SplitDNS.self, forKey: .splitDNS)
   }
 }
 
@@ -166,6 +182,7 @@ struct ClientState: Decodable {
   var settings = ClientSettings()
   var activeRoutingProfile: String?
   var routingProfiles: [RoutingProfile]?
+  var serverGroups: [ServerGroup]?
 
   var ruleSets: [RoutingProfile] {
     routingProfiles ?? [RoutingProfile(id: "default", name: "Основной", ruleCount: settings.routing.rules.count)]
@@ -184,6 +201,8 @@ struct ClientState: Decodable {
     let available = profiles
     return available.first { $0.id == settings.selected } ?? available.first
   }
+
+  var chainProfiles: [VPNProfile] { profiles.filter { $0.protocol != "group" } }
 
   func profileTitle(_ id: String) -> String {
     let profile = subscriptions.lazy.flatMap(\.servers).first { $0.id == id }

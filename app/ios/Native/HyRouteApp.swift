@@ -33,8 +33,9 @@ final class HyRouteMaintenanceDelegate: NSObject, UIApplicationDelegate {
           _ = try await NativeCore.shared.load()
           _ = try await NativeCore.shared.autoRefresh(maintenance: maintenance)
           try Task.checkCancellation()
+          let snapshot = try await NativeCore.shared.vpnState()
           success = await Task.detached(priority: .utility) {
-            HyRouteUpdateGeoWithMaintenance(maintenance)
+            HyRouteUpdateGeoWithMaintenance(maintenance, snapshot)
           }.value
         } catch {}
         task.setTaskCompleted(success: success && !Task.isCancelled)
@@ -231,6 +232,13 @@ private struct Dashboard: View {
             HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle")
           }
           .buttonStyle(.plain)
+          Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
+          NavigationLink {
+            VPNRecoveryPage(client: client)
+          } label: {
+            HyRow(title: "Защита VPN", symbol: "shield", detail: client.autoReconnect ? "Автовосстановление включено" : nil)
+          }
+          .buttonStyle(.plain)
         }
         .hyCard(padding: 12)
       }
@@ -241,6 +249,29 @@ private struct Dashboard: View {
     .navigationBarTitleDisplayMode(.inline)
     .sheet(isPresented: $choosingProfile) { ProfilePicker(client: client) }
     .sheet(isPresented: $importing) { ImportSheet(client: client) }
+  }
+}
+
+private struct VPNRecoveryPage: View {
+  @ObservedObject var client: Client
+
+  var body: some View {
+    Form {
+      Section {
+        Toggle("Автовосстановление", isOn: Binding(get: { client.autoReconnect }, set: { value in
+          Task { await client.setAutoReconnect(value) }
+        }))
+        Toggle("Блокировка при обрыве", isOn: Binding(get: { client.blockOnDrop && client.autoReconnect }, set: {
+          client.setBlockOnDrop($0)
+        }))
+        .disabled(!client.autoReconnect)
+      } footer: {
+        Text(client.canEditVPNRecovery ? "iOS восстанавливает VPN после первого подключения. Ручное отключение приостанавливает восстановление." : "Отключите VPN, чтобы изменить настройки.")
+      }
+      .disabled(!client.canEditVPNRecovery)
+    }
+    .navigationTitle("Защита VPN")
+    .navigationBarTitleDisplayMode(.inline)
   }
 }
 
@@ -386,6 +417,13 @@ private struct SubscriptionsPage: View {
           .buttonStyle(.plain)
           .accessibilityIdentifier("subscription-\(item.id)")
         }
+        NavigationLink {
+          ServerGroupsPage(client: client)
+        } label: {
+          HyRow(title: "Управление группами", symbol: "server.rack")
+            .hyCard(padding: 12)
+        }
+        .buttonStyle(.plain)
       }
       .padding(16)
     }

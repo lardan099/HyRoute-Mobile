@@ -80,7 +80,15 @@ public class MainActivity extends FlutterActivity {
                 }
                 case "saveSettings":
                     synchronized (ClientStore.LOCK) {
-                        store.write(Mobile.saveClientSettings(store.read(), call.argument("settings"), true));
+                        String current = store.read();
+                        String updated;
+                        try {
+                            updated = Mobile.saveClientSettings(current, call.argument("settings"), true);
+                        } catch (Exception failure) {
+                            result.error("settings", failure.getMessage(), null);
+                            break;
+                        }
+                        store.write(updated);
                     }
                     result.success(null);
                     break;
@@ -111,11 +119,25 @@ public class MainActivity extends FlutterActivity {
                     }
                     break;
                 }
+                case "changeServerGroup":
+                    synchronized (ClientStore.LOCK) {
+                        try {
+                            String updated = Mobile.changeServerGroup(store.read(), call.argument("id"), call.argument("definition"));
+                            String view = Mobile.clientStateView(updated);
+                            store.write(updated);
+                            result.success(view);
+                        } catch (IOException | GeneralSecurityException failure) {
+                            throw failure;
+                        } catch (Exception failure) {
+                            result.error("server-group", failure.getMessage(), null);
+                        }
+                    }
+                    break;
                 case "geoTags":
                     result.success(Mobile.geoTags());
                     break;
                 case "updateGeo":
-                    Mobile.updateGeo();
+                    Mobile.updateGeoForState(store.read());
                     result.success(null);
                     break;
                 case "geoSources": {
@@ -148,6 +170,16 @@ public class MainActivity extends FlutterActivity {
                     break;
                 case "vpnStatus":
                     result.success(HyRouteVpnService.status());
+                    break;
+                case "openVpnSettings":
+                    runOnUiThread(() -> {
+                        try {
+                            startActivity(new Intent(android.provider.Settings.ACTION_VPN_SETTINGS));
+                            result.success(null);
+                        } catch (android.content.ActivityNotFoundException e) {
+                            result.error("vpn-settings", null, null);
+                        }
+                    });
                     break;
                 case "vpnJournal":
                     result.success(Mobile.vpnJournal(journalPath(), ""));
@@ -211,7 +243,7 @@ public class MainActivity extends FlutterActivity {
 
     private void launchVpn() {
         if (!HyRouteVpnService.starting()) return;
-        Intent service = new Intent(this, HyRouteVpnService.class);
+        Intent service = new Intent(this, HyRouteVpnService.class).setAction(HyRouteVpnService.START);
         try {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
             else startService(service);
@@ -279,7 +311,7 @@ public class MainActivity extends FlutterActivity {
                         output.write(buffer, 0, count);
                     }
                 }
-                Mobile.importGeoFile(kind, temp.getPath());
+                Mobile.importGeoFileForState(kind, temp.getPath(), new ClientStore(getNoBackupFilesDir()).read());
                 result.success(true);
             } catch (Exception error) {
                 result.error("file", null, null);

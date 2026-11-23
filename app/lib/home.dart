@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'core.dart';
 import 'diagnostics.dart';
 import 'editors.dart';
+import 'network_tools.dart';
 import 'routing_tools.dart';
 
 class Home extends StatefulWidget {
@@ -25,6 +26,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var _scope = AppScope.all;
   var _packages = <String>[];
   var _routingProfiles = <RoutingProfile>[];
+  var _serverGroups = <ServerGroup>[];
+  SplitDns? _splitDns;
   var _activeRoutingProfile = 'default';
   String? _selected;
   int _tab = 0;
@@ -174,6 +177,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     _stateRevision++;
     _subscriptions = state.subscriptions;
     _routingProfiles = state.routingProfiles;
+    _serverGroups = state.serverGroups;
     _activeRoutingProfile = state.activeRoutingProfile;
     final settings = state.settings;
     _rules = settings.rules;
@@ -181,6 +185,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     _defaultAction = settings.defaultAction;
     _scope = settings.scope;
     _packages = settings.packages;
+    _splitDns = settings.splitDns;
     final servers = _servers;
     _selected = servers.any((server) => server.id == settings.selected)
         ? settings.selected
@@ -197,6 +202,30 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       ...active.where((server) => server.balance),
       ...active.where((server) => !server.balance),
     ];
+  }
+
+  List<Server> get _chainServers {
+    final groupIds = _serverGroups.map((group) => group.id).toSet();
+    return _servers.where((server) => !groupIds.contains(server.id)).toList();
+  }
+
+  void _openServerGroups(ServerGroupControl control) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ServerGroupsPage(
+          groups: _serverGroups,
+          servers: {
+            for (final server in _servers)
+              if (!server.balance) server.id: server,
+          }.values.toList(),
+          save: (id, group) async {
+            final state = await control.changeServerGroup(id, group);
+            if (mounted) setState(() => _restore(state));
+            return state.serverGroups;
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _chooseProfile() async {
@@ -295,6 +324,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     String? selected,
     AppScope? scope,
     List<String>? packages,
+    SplitDns? splitDns,
+    bool changeSplitDns = false,
     bool inline = false,
   }) async {
     if (_validating || _importing) return 'Дождитесь завершения загрузки.';
@@ -305,6 +336,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       selected: selected ?? _selected,
       scope: scope ?? _scope,
       packages: packages ?? _packages,
+      splitDns: changeSplitDns ? splitDns : _splitDns,
     );
     setState(() => _validating = true);
     try {
@@ -316,6 +348,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               subscriptions: _subscriptions,
               settings: next,
               routingProfiles: _routingProfiles,
+              serverGroups: _serverGroups,
               activeRoutingProfile: _activeRoutingProfile,
             ),
           ),
@@ -328,7 +361,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     } on PlatformException catch (error) {
       final message = error.code == 'storage'
           ? 'Не удалось сохранить настройки.'
-          : 'Проверьте сайт, IP и порт. Для готового списка нужны базы правил.';
+          : error.message ??
+                'Проверьте сайт, IP и порт. Для готового списка нужны базы правил.';
       if (!inline && mounted) _notify(message);
       return message;
     } on MissingPluginException {
@@ -452,7 +486,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Future<void> _editChain() async {
     final edit = await showDialog<(String, String)>(
       context: context,
-      builder: (_) => ChainEditor(servers: _servers, via: _via),
+      builder: (_) => ChainEditor(servers: _chainServers, via: _via),
     );
     if (!mounted || edit == null) return;
     final (exit, entry) = edit;
@@ -589,6 +623,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             MaterialPageRoute<void>(builder: (_) => VPNJournalPage(core: core)),
           ),
         ),
+      if (_vpn != null && widget.core is VPNSystemSettings)
+        ListTile(
+          leading: const Icon(Icons.shield_outlined),
+          title: const Text('Защита VPN'),
+          subtitle: const Text('Постоянный VPN и блокировка соединений'),
+          trailing: const Icon(Icons.open_in_new),
+          onTap: () async {
+            try {
+              await (widget.core as VPNSystemSettings).openVpnSettings();
+            } on PlatformException {
+              if (mounted) _notify('Откройте VPN в настройках Android.');
+            }
+          },
+        ),
       const _SectionTitle('Основной профиль'),
       Card(
         child: selected == null
@@ -635,6 +683,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         label: Text(_importing ? 'Загрузка…' : 'Добавить подписку'),
       ),
       const SizedBox(height: 10),
+      if (widget.core case final ServerGroupControl control)
+        ListTile(
+          leading: const Icon(Icons.dns_outlined),
+          title: const Text('Управление группами'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _openServerGroups(control),
+        ),
       if (_subscriptions.isEmpty)
         const Card(
           child: ListTile(
@@ -658,7 +713,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   subscription.servers.any((server) => !server.missing))
                 ListTile(
                   leading: const Icon(Icons.speed),
-                  title: const Text('Проверить всю подписку'),
+                  title: Text(
+                    subscription.id == 'server-groups'
+                        ? 'Проверить все группы'
+                        : 'Проверить всю подписку',
+                  ),
                   onTap: () => _openProbe('subscription', subscription.id),
                 ),
               if (subscription.canRefresh)
@@ -784,13 +843,38 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           onTap: _validating || _importing ? null : _openGeo,
         ),
       ),
+      if (_vpn != null)
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('Раздельный DNS'),
+            subtitle: Text(
+              _splitDns == null
+                  ? 'Выключен'
+                  : 'Доменов напрямую: ${_splitDns!.domains.length}',
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => SplitDnsPage(
+                  settings: _splitDns,
+                  save: (dns) => _saveSettings(
+                    splitDns: dns,
+                    changeSplitDns: true,
+                    inline: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       Card(
         child: ListTile(
           leading: const Icon(Icons.link_rounded),
           title: const Text('Профиль через профиль'),
           subtitle: Text(
             _via.isEmpty
-                ? (_servers.length < 2
+                ? (_chainServers.length < 2
                       ? 'Нужно два VPN-профиля'
                       : 'Выберите входной и выходной профили')
                 : _via.entries
@@ -801,7 +885,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       .join('\n'),
           ),
           trailing: const Icon(Icons.chevron_right_rounded),
-          onTap: _servers.length < 2 || _validating ? null : _editChain,
+          onTap: _chainServers.length < 2 || _validating ? null : _editChain,
         ),
       ),
     ];

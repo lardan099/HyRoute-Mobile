@@ -21,6 +21,14 @@ abstract interface class VPNControl {
   Future<void> stopVpn();
 }
 
+abstract interface class VPNSystemSettings {
+  Future<void> openVpnSettings();
+}
+
+abstract interface class ServerGroupControl {
+  Future<ClientState> changeServerGroup(String id, ServerGroup? group);
+}
+
 abstract interface class MaintenanceControl {
   Future<ClientState> refreshDue();
   Future<Map<String, String>> geoSources();
@@ -69,6 +77,8 @@ class PlatformCore
     implements
         ClientCore,
         VPNControl,
+        VPNSystemSettings,
+        ServerGroupControl,
         DiagnosticsControl,
         MaintenanceControl,
         RoutingControl {
@@ -92,6 +102,19 @@ class PlatformCore
 
   @override
   Future<void> stopVpn() => _channel.invokeMethod<void>('stopVpn');
+
+  @override
+  Future<void> openVpnSettings() =>
+      _channel.invokeMethod<void>('openVpnSettings');
+
+  @override
+  Future<ClientState> changeServerGroup(String id, ServerGroup? group) async =>
+      ClientState.decode(
+        await _channel.invokeMethod<String>('changeServerGroup', {
+          'id': id,
+          'definition': group == null ? '' : jsonEncode(group.toJson()),
+        }),
+      );
 
   @override
   Future<List<String>> vpnJournal() async {
@@ -228,6 +251,7 @@ class Server {
       name: name.isNotEmpty ? name : host,
       host: host,
       protocol: switch ((json['protocol'], json['balance'])) {
+        ('group', _) => 'Группа с резервом',
         ('vless', true) => 'VLESS · ${json['balanceStrategy'] ?? 'leastLoad'}',
         ('vless', _) => 'VLESS',
         _ => 'Hysteria 2',
@@ -333,6 +357,7 @@ class ClientState {
     this.subscriptions = const [],
     this.settings = const ClientSettings(),
     this.routingProfiles = const [],
+    this.serverGroups = const [],
     this.activeRoutingProfile = 'default',
   });
 
@@ -349,6 +374,9 @@ class ClientState {
       routingProfiles: (json['routingProfiles'] as List<dynamic>? ?? const [])
           .map((item) => RoutingProfile.fromJson(item as Map<String, dynamic>))
           .toList(growable: false),
+      serverGroups: (json['serverGroups'] as List<dynamic>? ?? const [])
+          .map((item) => ServerGroup.fromJson(item as Map<String, dynamic>))
+          .toList(growable: false),
       activeRoutingProfile:
           json['activeRoutingProfile'] as String? ?? 'default',
     );
@@ -357,7 +385,50 @@ class ClientState {
   final List<Subscription> subscriptions;
   final ClientSettings settings;
   final List<RoutingProfile> routingProfiles;
+  final List<ServerGroup> serverGroups;
   final String activeRoutingProfile;
+}
+
+class ServerGroup {
+  const ServerGroup(this.id, this.name, this.primary, this.reserve);
+
+  factory ServerGroup.fromJson(Map<String, dynamic> json) => ServerGroup(
+    json['id'] as String,
+    json['name'] as String,
+    (json['primary'] as List<dynamic>).cast<String>(),
+    json['reserve'] as String,
+  );
+
+  final String id;
+  final String name;
+  final List<String> primary;
+  final String reserve;
+
+  Map<String, Object> toJson() => {
+    'name': name,
+    'primary': primary,
+    'reserve': reserve,
+  };
+}
+
+class SplitDns {
+  const SplitDns(this.tunnel, this.direct, this.domains);
+
+  factory SplitDns.fromJson(Map<String, dynamic> json) => SplitDns(
+    json['tunnel'] as String,
+    json['direct'] as String,
+    (json['domains'] as List<dynamic>).cast<String>(),
+  );
+
+  final String tunnel;
+  final String direct;
+  final List<String> domains;
+
+  Map<String, Object> toJson() => {
+    'tunnel': tunnel,
+    'direct': direct,
+    'domains': domains,
+  };
 }
 
 class ClientSettings {
@@ -368,6 +439,7 @@ class ClientSettings {
     this.via = const {},
     this.scope = AppScope.all,
     this.packages = const [],
+    this.splitDns,
   });
 
   factory ClientSettings.fromJson(Map<String, dynamic> json) {
@@ -386,6 +458,10 @@ class ClientSettings {
       ),
       packages: (json['appPackages'] as List<dynamic>? ?? const [])
           .cast<String>(),
+      splitDns: switch (json['splitDNS']) {
+        final Map<String, dynamic> settings => SplitDns.fromJson(settings),
+        _ => null,
+      },
     );
   }
 
@@ -395,6 +471,7 @@ class ClientSettings {
   final Map<String, String> via;
   final AppScope scope;
   final List<String> packages;
+  final SplitDns? splitDns;
 
   Map<String, Object> toJson() => {
     'selected': ?selected,
@@ -405,6 +482,7 @@ class ClientSettings {
     },
     'appScope': scope.name,
     'appPackages': packages,
+    if (splitDns case final settings?) 'splitDNS': settings.toJson(),
   };
 }
 

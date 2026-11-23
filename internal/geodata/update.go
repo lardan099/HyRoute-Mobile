@@ -655,6 +655,11 @@ func (u *Updater) InstallFile(k Kind, path string) error {
 	if err := CheckKind(k, tmp); err != nil {
 		return err
 	}
+	if u.Validate != nil {
+		if err := u.Validate(k, tmp); err != nil {
+			return err
+		}
+	}
 	if err := renameRetry(tmp, u.DB.path(k)); err != nil {
 		return err
 	}

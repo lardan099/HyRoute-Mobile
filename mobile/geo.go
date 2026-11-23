@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -179,6 +180,10 @@ func SetGeoSource(kind, address string) error {
 // ImportGeoFile installs and pins one file. Network updates continue for
 // the other database, but leave the imported file in place.
 func ImportGeoFile(kind, path string) error {
+	return ImportGeoFileForState(kind, path, "")
+}
+
+func ImportGeoFileForState(kind, path, raw string) error {
 	k, err := geoKind(kind)
 	if err != nil {
 		return err
@@ -198,7 +203,11 @@ func ImportGeoFile(kind, path string) error {
 	if err := writeGeoSettings(dir, next); err != nil {
 		return err
 	}
-	updater := geodata.Updater{DB: geoCatalog.db}
+	validator, err := geoCategoryValidator(raw, geoCatalog.db)
+	if err != nil {
+		return errors.Join(err, writeGeoSettings(dir, previous))
+	}
+	updater := geodata.Updater{DB: geoCatalog.db, Validate: validator}
 	if err := updater.InstallFile(k, path); err != nil {
 		return errors.Join(err, writeGeoSettings(dir, previous))
 	}
@@ -207,16 +216,20 @@ func ImportGeoFile(kind, path string) error {
 
 // UpdateGeo refreshes configured network sources on request.
 func UpdateGeo() error {
-	return updateGeo(context.Background(), false)
+	return UpdateGeoForState("")
 }
+
+func UpdateGeoForState(raw string) error { return updateGeo(context.Background(), false, raw) }
 
 // AutoUpdateGeo refreshes installed network sources once daily and retries
 // failures after an hour. Selecting a local file opts that database out.
 func AutoUpdateGeo() error {
-	return updateGeo(context.Background(), true)
+	return AutoUpdateGeoForState("")
 }
 
-func updateGeo(parent context.Context, scheduled bool) error {
+func AutoUpdateGeoForState(raw string) error { return updateGeo(context.Background(), true, raw) }
+
+func updateGeo(parent context.Context, scheduled bool, raw string) error {
 	geoCatalog.Lock()
 	defer geoCatalog.Unlock()
 	if err := parent.Err(); err != nil {
@@ -242,11 +255,15 @@ func updateGeo(parent context.Context, scheduled bool) error {
 	}
 	source.Site = address(settings.Site, source.Site)
 	source.IP = address(settings.IP, source.IP)
+	validator, err := geoCategoryValidator(raw, geoCatalog.db)
+	if err != nil {
+		return err
+	}
 	updater := geodata.Updater{DB: geoCatalog.db, Validate: func(kind geodata.Kind, path string) error {
-		if *settings.source(kind) != "" {
-			return geodata.CheckKind(kind, path)
+		if err := geodata.CheckKind(kind, path); err != nil {
+			return err
 		}
-		return nil
+		return validator(kind, path)
 	}}
 	if scheduled {
 		state := updater.State()
@@ -275,4 +292,47 @@ func updateGeo(parent context.Context, scheduled bool) error {
 		_, err = updater.Update(ctx, source, false)
 	}
 	return err
+}
+
+func geoCategoryValidator(raw string, db *geodata.DB) (func(geodata.Kind, string) error, error) {
+	state, err := decodeClientState(raw)
+	if err != nil {
+		return nil, err
+	}
+	profiles := []json.RawMessage{state.Settings.Routing}
+	for _, profile := range state.RoutingProfiles {
+		if profile.ID != state.activeRoutingID() {
+			profiles = append(profiles, profile.Routing)
+		}
+	}
+	var used [2][]string
+	for _, raw := range profiles {
+		if len(raw) == 0 {
+			continue
+		}
+		var cfg routingConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+		for _, rule := range cfg.Rules {
+			for _, domain := range rule.AllDomains() {
+				prefix, name, _ := strings.Cut(strings.ToLower(strings.TrimSpace(domain)), ":")
+				kind, err := geoKind(prefix)
+				name = strings.TrimSpace(name)
+				if err != nil || name == "" || slices.Contains(used[kind], name) {
+					continue
+				}
+				if kind == geodata.IP {
+					if set, err := db.IP(name); name != "private" && err == nil && set.Len() > 0 {
+						used[kind] = append(used[kind], name)
+					}
+				} else if set, err := db.Site(name); err == nil && set.Len() > 0 {
+					used[kind] = append(used[kind], name)
+				}
+			}
+		}
+	}
+	return func(kind geodata.Kind, path string) error {
+		return geodata.CheckCategories(kind, path, used[kind])
+	}, nil
 }

@@ -20,10 +20,11 @@ type savedSubscription struct {
 }
 
 type clientSettings struct {
-	Selected    string          `json:"selected,omitempty"`
-	Routing     json.RawMessage `json:"routing,omitempty"`
-	AppScope    string          `json:"appScope,omitempty"`
-	AppPackages []string        `json:"appPackages,omitempty"`
+	Selected    string            `json:"selected,omitempty"`
+	Routing     json.RawMessage   `json:"routing,omitempty"`
+	AppScope    string            `json:"appScope,omitempty"`
+	AppPackages []string          `json:"appPackages,omitempty"`
+	SplitDNS    *splitDNSSettings `json:"splitDNS,omitempty"`
 }
 
 type clientState struct {
@@ -31,6 +32,7 @@ type clientState struct {
 	Settings             clientSettings      `json:"settings"`
 	ActiveRoutingProfile string              `json:"activeRoutingProfile,omitempty"`
 	RoutingProfiles      []routingProfile    `json:"routingProfiles,omitempty"`
+	ServerGroups         []serverGroup       `json:"serverGroups,omitempty"`
 }
 
 func decodeClientState(raw string) (clientState, error) {
@@ -41,6 +43,22 @@ func decodeClientState(raw string) (clientState, error) {
 		}
 	}
 	return state, nil
+}
+
+// VPNRecoveryState keeps only the settings and server data needed to start a tunnel.
+func VPNRecoveryState(raw string) (string, error) {
+	state, err := decodeClientState(raw)
+	if err != nil {
+		return "", err
+	}
+	recovery := clientState{Settings: state.Settings, ServerGroups: state.ServerGroups}
+	for _, item := range state.Subscriptions {
+		recovery.Subscriptions = append(recovery.Subscriptions, savedSubscription{
+			Snapshot: importedSubscription{Servers: item.Snapshot.Servers},
+		})
+	}
+	data, err := json.Marshal(recovery)
+	return string(data), err
 }
 
 // AddClientSubscription returns an updated snapshot for encrypted storage only.
@@ -183,19 +201,12 @@ func mergeClientSubscription(state clientState, index int, fresh string) (string
 
 func applyRefreshedSubscription(state *clientState, index int, fresh string, now time.Time) error {
 	item := &state.Subscriptions[index]
-	references := []string{state.Settings.Selected}
-	references, err := appendRoutingReferences(references, state.Settings.Routing)
+	references, err := state.routingReferences()
 	if err != nil {
 		return err
 	}
-	for _, profile := range state.RoutingProfiles {
-		if profile.ID == state.activeRoutingID() {
-			continue
-		}
-		references, err = appendRoutingReferences(references, profile.Routing)
-		if err != nil {
-			return err
-		}
+	for _, group := range state.ServerGroups {
+		references = append(references, group.memberIDs()...)
 	}
 	ids, err := json.Marshal(references)
 	if err != nil {
@@ -217,6 +228,22 @@ func applyRefreshedSubscription(state *clientState, index int, fresh string, now
 	item.AttemptedAt = now.Unix()
 	item.RefreshFailed = false
 	return nil
+}
+
+func (state clientState) routingReferences() ([]string, error) {
+	refs, err := appendRoutingReferences([]string{state.Settings.Selected}, state.Settings.Routing)
+	if err != nil {
+		return nil, err
+	}
+	for _, profile := range state.RoutingProfiles {
+		if profile.ID != state.activeRoutingID() {
+			refs, err = appendRoutingReferences(refs, profile.Routing)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return refs, nil
 }
 
 func appendRoutingReferences(references []string, raw json.RawMessage) ([]string, error) {
@@ -247,6 +274,18 @@ func SaveClientSettings(raw, settingsJSON string, android bool) (string, error) 
 	var settings clientSettings
 	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil {
 		return "", err
+	}
+	if err := settings.SplitDNS.normalize(); err != nil {
+		return "", err
+	}
+	var cfg routingConfig
+	if len(settings.Routing) != 0 {
+		if err := json.Unmarshal(settings.Routing, &cfg); err != nil {
+			return "", err
+		}
+		if err := state.validateGroupChains(cfg.ViaProfiles); err != nil {
+			return "", err
+		}
 	}
 	if _, err := newRouter(string(settings.Routing), settings.Selected, android); err != nil {
 		var pending *unavailableGeoError
@@ -300,11 +339,13 @@ func ClientStateView(raw string) (string, error) {
 		Settings             clientSettings        `json:"settings"`
 		ActiveRoutingProfile string                `json:"activeRoutingProfile"`
 		RoutingProfiles      []routingProfileView  `json:"routingProfiles"`
+		ServerGroups         []serverGroup         `json:"serverGroups,omitempty"`
 	}{
 		Subscriptions:        make([]subscriptionPreview, 0, len(state.Subscriptions)),
 		Settings:             state.Settings,
 		ActiveRoutingProfile: state.activeRoutingID(),
 		RoutingProfiles:      state.routingProfileViews(),
+		ServerGroups:         state.ServerGroups,
 	}
 	for _, item := range state.Subscriptions {
 		preview := previewSubscription(item.ID, item.Snapshot)
@@ -312,6 +353,14 @@ func ClientStateView(raw string) (string, error) {
 		preview.RefreshedAt = item.RefreshedAt
 		preview.AttemptedAt = item.AttemptedAt
 		preview.RefreshFailed = item.RefreshFailed || item.AttemptedAt > item.RefreshedAt
+		view.Subscriptions = append(view.Subscriptions, preview)
+	}
+	if len(state.ServerGroups) > 0 {
+		servers := state.singleServers()
+		preview := subscriptionPreview{ID: groupSubscriptionID, Title: "Мои группы"}
+		for _, group := range state.ServerGroups {
+			preview.Servers = append(preview.Servers, group.preview(servers))
+		}
 		view.Subscriptions = append(view.Subscriptions, preview)
 	}
 	data, err := json.Marshal(view)
