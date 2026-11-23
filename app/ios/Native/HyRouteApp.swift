@@ -318,7 +318,8 @@ private struct ConnectionStatus: View {
     if client.vpnBusy { return "Запуск VPN…" }
     switch client.vpnStatus {
     case .connected: return "VPN включён"
-    case .connecting, .reasserting: return "Подключение…"
+    case .connecting: return "Подключение…"
+    case .reasserting: return "Восстанавливаем VPN…"
     case .disconnecting: return "Отключение…"
     default: return "VPN выключен"
     }

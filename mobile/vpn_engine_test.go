@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,7 +262,119 @@ func TestVPNRoutesThroughEmbeddedHysteria(t *testing.T) {
 		if !route || !reserve || strings.Contains(trace, credential) || strings.Contains(trace, auth) {
 			t.Fatalf("want correlated route and actual reserve without credentials: %s", trace)
 		}
+		t.Run("RecoverStalledUDP", func(t *testing.T) {
+			relay, stall := stallableUDPRelay(t, netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)))
+			state.Subscriptions[0].Snapshot.Servers[0].Ports = fmt.Sprint(relay.Port())
+			testVPNChainRecovery(t, encodeNetworkTestState(t, state), endpoint.URL, stall)
+		})
 	})
+}
+
+// The relay drops packets from the original Hysteria UDP socket but still
+// serves a fresh socket after recovery.
+func stallableUDPRelay(t *testing.T, server netip.AddrPort) (netip.AddrPort, func()) {
+	t.Helper()
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	var stalled atomic.Bool
+	go func() {
+		data := make([]byte, 65535)
+		var client, old netip.AddrPort
+		for {
+			n, from, err := conn.ReadFromUDPAddrPort(data)
+			if err != nil {
+				return
+			}
+			if stalled.Load() && !old.IsValid() {
+				old = client
+			}
+			if from == server {
+				if client.IsValid() && client != old {
+					_, _ = conn.WriteToUDPAddrPort(data[:n], client)
+				}
+			} else if from != old {
+				client = from
+				_, _ = conn.WriteToUDPAddrPort(data[:n], server)
+			}
+		}
+	}()
+	return conn.LocalAddr().(*net.UDPAddr).AddrPort(), func() { stalled.Store(true) }
+}
+
+func testVPNChainRecovery(t *testing.T, raw, endpoint string, stall func()) {
+	t.Helper()
+	plan, err := NewVPNPlan(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := plan.configuration(t.Context(), false, vpnResolveForTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := func() *VPNSession {
+		ctx, cancel := context.WithCancel(t.Context())
+		config.health.restart()
+		instance, err := config.start(ctx, nil)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			cancel()
+			if instance.IsRunning() {
+				_ = instance.Close()
+			}
+		})
+		return &VPNSession{ctx: ctx, cancel: cancel, instance: instance, health: config.health}
+	}
+	first := start()
+	if got := first.checkChains(time.Second, endpoint); got != "idle" {
+		t.Fatalf("must wait for user traffic, got %q", got)
+	}
+	user := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			dest, err := xnet.ParseDestination("tcp:" + addr)
+			if err != nil {
+				return nil, err
+			}
+			ctx = xctx.ContextWithID(ctx, 21)
+			ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: "hyroute-tun"})
+			return core.Dial(ctx, first.instance, dest)
+		},
+	}}
+	response, err := user.Get(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if got := first.checkChains(2*time.Second, endpoint); got != "healthy" {
+		t.Fatalf("working chain reported %q", got)
+	}
+	stall()
+	for _, want := range []string{"failed", "restart"} {
+		if got := first.checkChains(400*time.Millisecond, endpoint); got != want {
+			t.Fatalf("silently stalled UDP chain reported %q, want %q", got, want)
+		}
+	}
+	if !first.instance.IsRunning() {
+		t.Fatal("the first engine must still be running during the silent transport stall")
+	}
+	first.cancel()
+	if err := first.instance.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := start().checkChains(3*time.Second, endpoint); got != "healthy" {
+		t.Fatalf("fresh chain must work while the original UDP socket is still blocked, got %q", got)
+	}
+}
+
+func vpnResolveForTest(_ context.Context, host string) netip.Addr {
+	ip, _ := netip.ParseAddr(host)
+	return ip
 }
 
 func startVPNTestServer(t *testing.T, raw string) {
@@ -308,10 +421,7 @@ func assertVPNStateRoundTripWithLog(t *testing.T, raw, target string, before fun
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientConfig, err := plan.configuration(context.Background(), false, func(_ context.Context, host string) netip.Addr {
-		ip, _ := netip.ParseAddr(host)
-		return ip
-	})
+	clientConfig, err := plan.configuration(context.Background(), false, vpnResolveForTest)
 	if err != nil {
 		t.Fatal(err)
 	}

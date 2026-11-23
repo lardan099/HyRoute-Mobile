@@ -175,6 +175,14 @@ NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd) {
     return [(MobileVPNPrepared *)prepared start:fd platformImpl:nil error:&error];
 }
 
+BOOL HyRouteVPNHasChains(NSObject *prepared) {
+    return [(MobileVPNPrepared *)prepared hasChains];
+}
+
+NSString *HyRouteCheckVPNChains(NSObject *session) {
+    return [(MobileVPNSession *)session checkChains] ?: @"idle";
+}
+
 void HyRouteStopVPN(NSObject *session) {
     [(MobileVPNSession *)session stop];
 }

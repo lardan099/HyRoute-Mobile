@@ -1,15 +1,19 @@
 import Foundation
 
-struct VPNJournalEvent: Decodable {
+struct VPNJournalEvent: Decodable, Hashable {
   let at: Int64
   let message: String
 
   static func lines(_ data: Data, timeZone: TimeZone = .autoupdatingCurrent) throws -> [String] {
+    lines(try JSONDecoder().decode([Self].self, from: data), timeZone: timeZone)
+  }
+
+  static func lines(_ events: [Self], timeZone: TimeZone = .autoupdatingCurrent) -> [String] {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = timeZone
     formatter.dateFormat = "dd.MM HH:mm:ss"
-    return try JSONDecoder().decode([Self].self, from: data).map { event in
+    return events.map { event in
       let date = Date(timeIntervalSince1970: Double(event.at) / 1000)
       return formatter.string(from: date) + "  " + event.message
     }

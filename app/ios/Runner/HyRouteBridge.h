@@ -33,6 +33,8 @@ BOOL HyRouteInstallVPNGeodataSnapshotFile(NSString *path, NSString *directory);
 NSObject * _Nullable HyRoutePlanVPN(NSString *state, NSString *geoDirectory, NSString * _Nullable * _Nonnull issue);
 NSObject * _Nullable HyRoutePrepareVPN(NSObject *plan);
 NSObject * _Nullable HyRouteStartVPN(NSObject *prepared, int32_t fd);
+BOOL HyRouteVPNHasChains(NSObject *prepared);
+NSString *HyRouteCheckVPNChains(NSObject *session);
 void HyRouteStopVPN(NSObject *session);
 void HyRouteSetTrafficLogging(NSObject *session, BOOL enabled);
 NSString *HyRouteTrafficEvents(NSObject *session);

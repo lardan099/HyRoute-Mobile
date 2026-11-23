@@ -13,6 +13,16 @@ enum VPNStorage {
     sharedDirectory?.appendingPathComponent("tunnel-journal.json").path ?? ""
   }
 
+  static func providerJournal() -> String {
+    let files = FileManager.default
+    if let sharedDirectory, files.isWritableFile(atPath: sharedDirectory.path) {
+      return tunnelJournal
+    }
+    guard let cache = files.urls(for: .cachesDirectory, in: .userDomainMask).first else { return "" }
+    try? files.createDirectory(at: cache, withIntermediateDirectories: true)
+    return cache.appendingPathComponent("tunnel-journal.json").path
+  }
+
   private static var recoveryDirectory: URL? {
     sharedDirectory?.appendingPathComponent("VPN Recovery", isDirectory: true)
   }
@@ -74,7 +84,7 @@ struct ProbeCommand: Codable {
 }
 
 struct TrafficCommand: Codable {
-  enum Action: String, Codable { case trafficStatus, trafficSet, trafficClear }
+  enum Action: String, Codable { case trafficStatus, trafficSet, trafficClear, vpnJournal }
   let action: Action
   var enabled: Bool?
 }

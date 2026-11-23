@@ -246,6 +246,7 @@ type vpnConfiguration struct {
 	balancers map[string]bool
 	labels    map[string]string
 	traffic   *trafficJournal
+	health    *chainHealth
 }
 
 func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(context.Context, string) netip.Addr) (*vpnConfiguration, error) {
@@ -345,6 +346,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	prepared := &vpnConfiguration{plan: p, xray: config, balancers: balancers, labels: labels}
 	if !p.android {
 		prepared.traffic = new(trafficJournal)
+		prepared.health = newChainHealth(outbounds)
 	}
 	return prepared, nil
 }

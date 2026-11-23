@@ -60,6 +60,10 @@ type VPNPlatform interface {
 // installing the OS VPN so bootstrap DNS cannot recurse through the tunnel.
 type VPNPrepared struct{ config *vpnConfiguration }
 
+func (p *VPNPrepared) HasChains() bool {
+	return p.config.health != nil && len(p.config.health.tags) > 0
+}
+
 func (p *VPNPlan) Prepare() (*VPNPrepared, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -131,8 +135,10 @@ func init() {
 // descriptor. The caller remains responsible for the original descriptor.
 type VPNSession struct {
 	instance *core.Instance
+	ctx      context.Context
 	cancel   context.CancelFunc
 	traffic  *trafficJournal
+	health   *chainHealth
 }
 
 func (p *VPNPrepared) Start(fd int32, platformImpl VPNPlatform) (*VPNSession, error) {
@@ -153,13 +159,16 @@ func (p *VPNPrepared) Start(fd int32, platformImpl VPNPlatform) (*VPNSession, er
 	}
 	defer os.Unsetenv(platform.TunFdKey)
 	ctx, cancel := context.WithCancel(context.Background())
+	if p.config.health != nil {
+		p.config.health.restart()
+	}
 	instance, err := p.config.start(ctx, platformImpl)
 	if err != nil {
 		cancel()
 		vpnRuntime.sockets.Store(nil)
 		return nil, errors.New("не удалось запустить сетевое ядро")
 	}
-	session := &VPNSession{instance: instance, cancel: cancel, traffic: p.config.traffic}
+	session := &VPNSession{instance: instance, ctx: ctx, cancel: cancel, traffic: p.config.traffic, health: p.config.health}
 	vpnRuntime.session = session
 	return session, nil
 }

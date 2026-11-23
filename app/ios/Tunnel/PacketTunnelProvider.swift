@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Network
 import NetworkExtension
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
@@ -13,10 +14,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private let worker = DispatchQueue(label: "io.hyroute.tunnel")
   private var packetBridge: PacketBridge?
   private var session: NSObject?
+  private var prepared: NSObject?
+  private var trafficLogging = false
+  private var networkMonitor: NWPathMonitor?
+  private var restartAttempts = 0
+  private var nextRestart = DispatchTime.now()
   private var probe: NSObject?
   private var probeToken: UUID?
   private var generation = 0
   private var pendingGeodata: (token: UUID, request: StartRequest)?
+  private lazy var journalPath = VPNStorage.providerJournal()
   private lazy var geodataReceiver: GeodataReceiver? = {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first.map {
       GeodataReceiver(directory: $0.appendingPathComponent("hyroute-tunnel-geo", isDirectory: true))
@@ -28,7 +35,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       self.cancelGeodataStart(.cancelled)
       self.generation += 1
       let manualState = options?["state"] as? String
-      let journal = VPNStorage.tunnelJournal
+      let journal = self.journalPath
       HyRouteRecordVPNEvent(journal, "vpn_provider_start")
       let recoveryEnabled = (self.protocolConfiguration as? NETunnelProviderProtocol)?
         .providerConfiguration?["recovery"] as? Bool == true
@@ -84,7 +91,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   private func failGeodataStart(_ request: StartRequest) {
     let error = TunnelStartError.geodataTransfer
-    HyRouteRecordVPNEvent(VPNStorage.tunnelJournal, error.journalEvent)
+    HyRouteRecordVPNEvent(journalPath, error.journalEvent)
     request.completion(error)
   }
 
@@ -92,12 +99,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     guard let pending = pendingGeodata else { return }
     pendingGeodata = nil
     geodataReceiver?.abort()
-    HyRouteRecordVPNEvent(VPNStorage.tunnelJournal, error.journalEvent)
+    HyRouteRecordVPNEvent(journalPath, error.journalEvent)
     pending.request.completion(error)
   }
 
   private func openTunnel(_ request: StartRequest, geodata: URL, sharedGeodataAvailable: Bool = true) {
-    let journal = VPNStorage.tunnelJournal
+    let journal = journalPath
     var issue: NSString?
     guard let plan = HyRoutePlanVPN(request.state, geodata.path, &issue) else {
       let failure = TunnelStartError.planFailure(issue as String?, sharedGeodataAvailable: sharedGeodataAvailable)
@@ -127,10 +134,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
           }
           self.packetBridge = bridge
           self.session = session
-          HyRouteSetTrafficLogging(session, request.trafficLogging)
+          self.prepared = prepared
+          self.trafficLogging = request.trafficLogging
+          HyRouteSetTrafficLogging(session, self.trafficLogging)
           bridge.start()
           HyRouteRecordVPNEvent(journal, "vpn_running")
           request.completion(nil)
+          if HyRouteVPNHasChains(prepared) {
+            let monitor = NWPathMonitor()
+            monitor.start(queue: self.worker)
+            self.networkMonitor = monitor
+            self.scheduleChainCheck(after: 12)
+          }
         } catch {
           let startError = error as? TunnelStartError ?? .networkSettings
           let detail = error as NSError
@@ -142,18 +157,88 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
   }
 
+  private func scheduleChainCheck(after delay: TimeInterval) {
+    let expectedGeneration = generation
+    worker.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self, self.generation == expectedGeneration, let monitor = self.networkMonitor else { return }
+      if monitor.currentPath.status == .unsatisfied {
+        self.scheduleChainCheck(after: 12)
+      } else if let session = self.session {
+        DispatchQueue.global(qos: .utility).async {
+          let result = HyRouteCheckVPNChains(session)
+          self.worker.async {
+            guard self.generation == expectedGeneration, self.session === session else { return }
+            self.handleChainHealth(result)
+          }
+        }
+      } else {
+        self.restartChainEngine()
+      }
+    }
+  }
+
+  private func handleChainHealth(_ result: String) {
+    if result == "restart", networkMonitor?.currentPath.status != .unsatisfied, DispatchTime.now() >= nextRestart {
+      restartChainEngine()
+      return
+    }
+    if result == "healthy", reasserting {
+      reasserting = false
+      restartAttempts = 0
+      nextRestart = .now()
+      HyRouteRecordVPNEvent(journalPath, "vpn_chain_recovered")
+    }
+    scheduleChainCheck(after: result == "failed" || result == "restart" || reasserting ? 5 : 12)
+  }
+
+  private func restartChainEngine() {
+    guard let prepared, let packetBridge else { return }
+    if DispatchTime.now() < nextRestart {
+      scheduleChainCheck(after: 5)
+      return
+    }
+    reasserting = true
+    let cooldown = 15 * (1 << min(restartAttempts, 3))
+    restartAttempts = min(restartAttempts + 1, 4)
+    nextRestart = .now() + .seconds(cooldown)
+    HyRouteRecordVPNEvent(journalPath, "vpn_chain_restart")
+    cancelProbe()
+    if let session { HyRouteStopVPN(session) }
+    session = nil
+    // Xray duplicates this descriptor. Keep the Network Extension link and routes
+    // installed while the new core creates fresh transport sessions.
+    if let restarted = HyRouteStartVPN(prepared, packetBridge.coreFD) {
+      HyRouteSetTrafficLogging(restarted, trafficLogging)
+      session = restarted
+      scheduleChainCheck(after: 2)
+    } else {
+      HyRouteRecordVPNEvent(journalPath, "vpn_chain_restart_failed")
+      scheduleChainCheck(after: TimeInterval(cooldown))
+    }
+  }
+
+  private func cancelProbe() {
+    if let probe { HyRouteCancelProbe(probe) }
+    probe = nil
+    probeToken = nil
+  }
+
   override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
     worker.async {
       self.generation += 1
       self.cancelGeodataStart(.cancelled)
-      if let probe = self.probe { HyRouteCancelProbe(probe) }
-      self.probe = nil
-      self.probeToken = nil
+      self.networkMonitor?.cancel()
+      self.networkMonitor = nil
+      self.cancelProbe()
       if let session = self.session { HyRouteStopVPN(session) }
       self.session = nil
+      self.prepared = nil
+      self.reasserting = false
+      self.restartAttempts = 0
+      self.nextRestart = .now()
       self.packetBridge?.close()
       self.packetBridge = nil
-      HyRouteRecordVPNEvent(VPNStorage.tunnelJournal, "vpn_stopped")
+      HyRouteRecordVPNEvent(self.journalPath, "vpn_stopped")
       completionHandler()
     }
   }
@@ -161,14 +246,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   override func handleAppMessage(_ data: Data, completionHandler: ((Data?) -> Void)?) {
     worker.async {
       if data.count <= 256, let command = try? JSONDecoder().decode(TrafficCommand.self, from: data) {
+        if command.action == .vpnJournal {
+          completionHandler?(Data(HyRouteVPNJournalEvents("", self.journalPath).utf8))
+          return
+        }
         guard let session = self.session else {
           completionHandler?(nil)
           return
         }
         switch command.action {
-        case .trafficStatus: break
+        case .trafficStatus, .vpnJournal: break
         case .trafficSet:
-          HyRouteSetTrafficLogging(session, command.enabled == true)
+          self.trafficLogging = command.enabled == true
+          HyRouteSetTrafficLogging(session, self.trafficLogging)
         case .trafficClear:
           HyRouteClearTrafficEvents(session)
         }
@@ -208,7 +298,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let probe = self.probe { HyRouteCancelProbe(probe) }
         self.probeToken = command.token
         if let state = command.state, let scope = command.scope, let id = command.id {
-          self.probe = HyRouteStartProbe(state, scope, id, VPNStorage.tunnelJournal)
+          self.probe = HyRouteStartProbe(state, scope, id, self.journalPath)
         } else {
           self.probe = nil
         }

@@ -189,7 +189,15 @@ func (p *trafficOutbound) Process(ctx context.Context, link *transport.Link, dia
 	journal := p.network.traffic
 	inbound := session.InboundFromContext(ctx)
 	flow := uint32(xctx.IDFromContext(ctx))
-	if !journal.enabled.Load() || inbound == nil || flow == 0 {
+	if inbound == nil || flow == 0 {
+		return p.Outbound.Process(ctx, link, dialer)
+	}
+	if p.network.health != nil && (inbound.Tag == "hyroute-tun" || p.network.balancers[inbound.Tag]) {
+		if finish := p.network.health.use(p.tag); finish != nil {
+			defer finish()
+		}
+	}
+	if !journal.enabled.Load() {
 		return p.Outbound.Process(ctx, link, dialer)
 	}
 	outbounds := session.OutboundsFromContext(ctx)

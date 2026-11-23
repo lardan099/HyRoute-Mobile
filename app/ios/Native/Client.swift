@@ -87,9 +87,9 @@ actor NativeCore {
     if let path = try? journalPath() { HyRouteRecordVPNError(path, event, source, code) }
   }
 
-  func journal() throws -> [String] {
+  func journal() throws -> [VPNJournalEvent] {
     let raw = HyRouteVPNJournalEvents(try journalPath(), VPNStorage.tunnelJournal)
-    return try VPNJournalEvent.lines(Data(raw.utf8))
+    return try JSONDecoder().decode([VPNJournalEvent].self, from: Data(raw.utf8))
   }
 
   func importSubscription(_ input: String) throws -> ClientState {
@@ -200,6 +200,7 @@ final class Client: ObservableObject {
   private var updatingAutomatically = false
   private var stateRevision = 0
   private var startingFingerprint: Data?
+  private var privateTunnelJournal: [VPNJournalEvent] = []
   @Published private(set) var preferencesPending = false
   @Published private(set) var restartingVPN = false
   @Published private(set) var trafficLogging = UserDefaults.standard.bool(forKey: "vpnTrafficLogging")
@@ -465,7 +466,20 @@ final class Client: ObservableObject {
     catch { await core.record("vpn_recovery_storage_error") }
   }
 
-  func journal() async throws -> [String] { try await core.journal() }
+  func journal() async throws -> [String] {
+    let events = try await core.journal()
+    if [.connected, .reasserting].contains(vpnStatus),
+       let session = manager?.connection as? NETunnelProviderSession,
+       let command = try? JSONEncoder().encode(TrafficCommand(action: .vpnJournal)),
+       let raw = try? await session.hyRouteMessage(command),
+       let provider = try? JSONDecoder().decode([VPNJournalEvent].self, from: raw) {
+      privateTunnelJournal = provider
+    }
+    var seen = Set<VPNJournalEvent>()
+    let recent = (events + privateTunnelJournal).sorted { $0.at > $1.at }
+      .filter { seen.insert($0).inserted }.prefix(160)
+    return VPNJournalEvent.lines(Array(recent))
+  }
 
   func setTrafficLogging(_ enabled: Bool) async throws {
     if vpnStatus == .connected {
