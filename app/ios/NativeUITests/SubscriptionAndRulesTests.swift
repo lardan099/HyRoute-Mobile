@@ -81,6 +81,28 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.segmentedControls.buttons["Ошибки и блокировки"].exists)
   }
 
+  func testDeletesSavedChainAndKeepsItsServers() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-rules"])
+    tap(app.segmentedControls.buttons["Настройки"].firstMatch)
+    tap(app.buttons["rules-chains"])
+    let saved = app.buttons["saved-chain-demo-node"]
+    tap(saved)
+    tap(app.buttons["remove-saved-chain"])
+    tap(app.buttons["Удалить"])
+    let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: saved)
+    XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 10), .completed)
+    tap(app.buttons["Отмена"])
+    tap(app.buttons["rules-chains"])
+    XCTAssertTrue(app.navigationBars["Цепочки"].waitForExistence(timeout: 10))
+    XCTAssertFalse(saved.exists)
+    tap(app.buttons["Отмена"])
+    tap(app.buttons["tab-home"])
+    tap(app.buttons["profilePicker"])
+    XCTAssertTrue(app.staticTexts["Тестовый сервер"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Запасной сервер"].exists)
+  }
+
   func testChecksSavedRouteAndShowsSubscriptionTraffic() {
     let app = launch(screen: "routes-test")
     tap(app.buttons["tab-subscriptions"])
@@ -95,6 +117,21 @@ final class SubscriptionAndRulesTests: XCTestCase {
     let rule = app.staticTexts["route-check-rule"]
     XCTAssertTrue(rule.waitForExistence(timeout: 10))
     XCTAssertEqual(rule.label, "Сайт без VPN")
+  }
+
+  func testRoutesYouTubeDomainToItsOwnProfile() {
+    let app = launch(screen: "routes-test")
+    tap(app.buttons["tab-rules"])
+    tap(app.buttons["route-check"])
+    let address = app.textFields["route-check-address"]
+    tap(address)
+    address.typeText("m.youtube.com")
+    tap(app.buttons["route-check-submit"])
+    let rule = app.staticTexts["route-check-rule"]
+    XCTAssertTrue(rule.waitForExistence(timeout: 10))
+    let rerouted = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "YouTube через запасной"), object: rule)
+    XCTAssertEqual(XCTWaiter.wait(for: [rerouted], timeout: 10), .completed)
+    XCTAssertTrue(app.staticTexts["Запасной сервер"].exists)
   }
 
   func testCopiesAndSwitchesNamedRoutingProfiles() {

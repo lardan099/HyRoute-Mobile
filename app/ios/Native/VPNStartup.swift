@@ -21,6 +21,22 @@ struct VPNStartup {
   }
 }
 
+struct ChainRecoveryPolicy {
+  private var restartAttempts = 0
+  private var nextRestart = DispatchTime(uptimeNanoseconds: 0)
+
+  func canRestart(networkAvailable: Bool, now: DispatchTime = .now()) -> Bool {
+    networkAvailable && now >= nextRestart
+  }
+
+  mutating func didRestart(now: DispatchTime = .now()) -> Int {
+    let cooldown = 15 * (1 << min(restartAttempts, 3))
+    restartAttempts = min(restartAttempts + 1, 4)
+    nextRestart = now + .seconds(cooldown)
+    return cooldown
+  }
+}
+
 enum TunnelStartError: Int, CustomNSError {
   case configuration = 1, preparation = 2, networkSettings = 3, engine = 4, cancelled = 5
   case missingOptions = 6, unreadableState = 7, noProfile = 8, rules = 9

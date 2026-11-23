@@ -446,6 +446,7 @@ private struct ChainEditor: View {
   @State private var exit = ""
   @State private var entry = ""
   @State private var saveError: String?
+  @State private var removing: String?
 
   private var profiles: [VPNProfile] { client.state.chainProfiles }
   private var entrances: [VPNProfile] { client.state.profiles }
@@ -468,6 +469,10 @@ private struct ChainEditor: View {
                 Button { selectExit(saved) } label: {
                   HyRow(title: client.state.profileTitle(saved), symbol: "link",
                         detail: "Через \(client.state.profileTitle(first))")
+                }
+                .accessibilityIdentifier("saved-chain-\(saved)")
+                .swipeActions(allowsFullSwipe: false) {
+                  Button("Удалить", role: .destructive) { removing = saved }
                 }
               }
             }
@@ -524,6 +529,10 @@ private struct ChainEditor: View {
             .onChange(of: entry) { _ in saveError = nil }
           }
         }
+        if routing.viaProfiles[exit] != nil && savedExits.contains(exit) {
+          Button("Удалить связь", role: .destructive) { removing = exit }
+            .accessibilityIdentifier("remove-saved-chain")
+        }
         if let saveError {
           Text(saveError).foregroundStyle(HyStyle.failure)
             .accessibilityIdentifier("chain-save-error")
@@ -533,6 +542,11 @@ private struct ChainEditor: View {
       .hyList()
       .navigationTitle("Цепочки")
       .navigationBarTitleDisplayMode(.inline)
+      .confirmationDialog("Удалить связь?", isPresented: Binding(
+        get: { removing != nil }, set: { if !$0 { removing = nil } }
+      ), titleVisibility: .visible, presenting: removing) { id in
+        Button("Удалить", role: .destructive) { Task { await removeLink(id) } }
+      }
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
         ToolbarItem(placement: .confirmationAction) {

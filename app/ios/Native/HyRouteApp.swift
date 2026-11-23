@@ -1,3 +1,4 @@
+import AppIntents
 import BackgroundTasks
 import NetworkExtension
 import SwiftUI
@@ -7,7 +8,7 @@ import UIKit
 @MainActor
 struct HyRouteApp: App {
   @UIApplicationDelegateAdaptor(HyRouteMaintenanceDelegate.self) private var maintenanceDelegate
-  @StateObject private var client = Client()
+  @StateObject private var client = Client.shared
 
   var body: some Scene {
     WindowGroup {
@@ -45,6 +46,7 @@ final class HyRouteMaintenanceDelegate: NSObject, UIApplicationDelegate {
         HyRouteCancelMaintenance(maintenance)
       }
     }
+    HyRouteShortcuts.updateAppShortcutParameters()
     Self.schedule()
     return true
   }

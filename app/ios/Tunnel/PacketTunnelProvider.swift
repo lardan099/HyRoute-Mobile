@@ -17,8 +17,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private var prepared: NSObject?
   private var trafficLogging = false
   private var networkMonitor: NWPathMonitor?
-  private var restartAttempts = 0
-  private var nextRestart = DispatchTime.now()
+  private var chainRecovery = ChainRecoveryPolicy()
   private var probe: NSObject?
   private var probeToken: UUID?
   private var generation = 0
@@ -178,14 +177,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   }
 
   private func handleChainHealth(_ result: String) {
-    if result == "restart", networkMonitor?.currentPath.status != .unsatisfied, DispatchTime.now() >= nextRestart {
+    if result == "restart", chainRecovery.canRestart(networkAvailable: networkMonitor?.currentPath.status != .unsatisfied) {
       restartChainEngine()
       return
     }
     if result == "healthy", reasserting {
       reasserting = false
-      restartAttempts = 0
-      nextRestart = .now()
+      chainRecovery = ChainRecoveryPolicy()
       HyRouteRecordVPNEvent(journalPath, "vpn_chain_recovered")
     }
     scheduleChainCheck(after: result == "failed" || result == "restart" || reasserting ? 5 : 12)
@@ -193,14 +191,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   private func restartChainEngine() {
     guard let prepared, let packetBridge else { return }
-    if DispatchTime.now() < nextRestart {
+    if !chainRecovery.canRestart(networkAvailable: networkMonitor?.currentPath.status != .unsatisfied) {
       scheduleChainCheck(after: 5)
       return
     }
     reasserting = true
-    let cooldown = 15 * (1 << min(restartAttempts, 3))
-    restartAttempts = min(restartAttempts + 1, 4)
-    nextRestart = .now() + .seconds(cooldown)
+    let cooldown = chainRecovery.didRestart()
     HyRouteRecordVPNEvent(journalPath, "vpn_chain_restart")
     cancelProbe()
     if let session { HyRouteStopVPN(session) }
@@ -234,8 +230,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       self.session = nil
       self.prepared = nil
       self.reasserting = false
-      self.restartAttempts = 0
-      self.nextRestart = .now()
+      self.chainRecovery = ChainRecoveryPolicy()
       self.packetBridge?.close()
       self.packetBridge = nil
       HyRouteRecordVPNEvent(self.journalPath, "vpn_stopped")

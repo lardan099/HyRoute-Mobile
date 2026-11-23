@@ -29,5 +29,18 @@ struct VPNStartupTests {
     precondition((TunnelStartError.missingReference as NSError).code == 11)
     precondition(TunnelStartError.planFailure("geo", sharedGeodataAvailable: false) == .geodataSharedStorage)
     precondition((TunnelStartError.geodataSharedStorage as NSError).code == 13)
+
+    var recovery = ChainRecoveryPolicy()
+    var now = DispatchTime(uptimeNanoseconds: 1)
+    for cooldown in [15, 30, 60, 120, 120] {
+      precondition(!recovery.canRestart(networkAvailable: false, now: now))
+      precondition(recovery.canRestart(networkAvailable: true, now: now))
+      precondition(recovery.didRestart(now: now) == cooldown)
+      precondition(!recovery.canRestart(networkAvailable: true, now: now + .seconds(cooldown - 1)))
+      now = now + .seconds(cooldown)
+    }
+    recovery = ChainRecoveryPolicy()
+    precondition(recovery.didRestart(now: now) == 15)
+    print("VPN startup and chain cooldown cases passed")
   }
 }

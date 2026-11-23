@@ -23,9 +23,13 @@ actor NativeCore {
     let fixture = """
     {"subscriptions":[{"id":"demo","url":"https://example.test/sub","refreshedAt":1795400000,
       "snapshot":{"title":"Тестовая подписка","userInfo":"upload=1073741824; download=2147483648; total=10737418240; expire=1893456000",
-      "servers":[{"id":"demo-node","name":"Тестовый сервер","host":"192.0.2.2","ports":"443","auth":"fixture"}]}}],
+      "servers":[
+        {"id":"demo-node","name":"Тестовый сервер","host":"192.0.2.2","ports":"443","auth":"fixture"},
+        {"id":"demo-entry","name":"Запасной сервер","host":"192.0.2.3","ports":"443","auth":"fixture"}]}}],
       "settings":{"selected":"demo-node","routing":{"defaultAction":"tunnel","rules":[
-        {"name":"Сайт без VPN","domains":["example.org"],"action":"direct"}]}}}
+        {"name":"Сайт без VPN","domains":["example.org"],"action":"direct"},
+        {"name":"YouTube через запасной","domains":["domain:youtube.com"],"action":"tunnel","profile":"demo-entry"}
+      ],"viaProfiles":{"demo-node":"demo-entry"}}}}
     """
     routingFixture = fixture
     return try view(fixture)
@@ -189,7 +193,8 @@ actor NativeCore {
 }
 
 @MainActor
-final class Client: ObservableObject {
+final class Client: ObservableObject, VPNCommandTarget {
+  static let shared = Client()
   private let core = NativeCore.shared
   private var manager: NETunnelProviderManager?
   private var startup: (state: VPNStartup, began: ContinuousClock.Instant)?
@@ -201,6 +206,8 @@ final class Client: ObservableObject {
   private var stateRevision = 0
   private var startingFingerprint: Data?
   private var privateTunnelJournal: [VPNJournalEvent] = []
+  private var runningCommand = false
+  private var startupReport: UUID?
   @Published private(set) var preferencesPending = false
   @Published private(set) var restartingVPN = false
   @Published private(set) var trafficLogging = UserDefaults.standard.bool(forKey: "vpnTrafficLogging")
@@ -227,57 +234,113 @@ final class Client: ObservableObject {
   }
 
   func toggleVPN() async {
-    guard !restartingVPN else { return }
-    await changeVPNStatus()
+    guard !runningCommand, !restartingVPN, !vpnBusy, !stoppingVPN else { return }
+    if vpnStatus.isActiveTunnel { await stopVPN() }
+    else { await startVPN() }
   }
 
   var canApplyVPNChanges: Bool {
-    preferencesPending && [.connected, .reasserting, .connecting].contains(vpnStatus)
+    preferencesPending && vpnStatus.isActiveTunnel
   }
 
   func reconnectVPN() async {
-    guard canApplyVPNChanges, !restartingVPN, !vpnBusy, !stoppingVPN else { return }
+    guard canApplyVPNChanges, !runningCommand, !restartingVPN, !vpnBusy, !stoppingVPN else { return }
     restartingVPN = true
     defer { restartingVPN = false }
-    await changeVPNStatus()
-    guard stoppingVPN || vpnStatus == .disconnected || vpnStatus == .invalid else { return }
-    let deadline = ContinuousClock.now + .seconds(10)
-    while vpnStatus != .disconnected && vpnStatus != .invalid && ContinuousClock.now < deadline {
-      do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-      syncVPNStatus()
-    }
-    guard vpnStatus == .disconnected || vpnStatus == .invalid else {
-      error = "VPN ещё отключается. Повторите подключение после остановки."
-      return
-    }
-    await changeVPNStatus()
+    error = nil
+    await stopVPN()
+    guard error == nil else { return }
+    do { try await waitForCommandStatus(connected: false) }
+    catch { self.error = error.localizedDescription; return }
+    await startVPN()
   }
 
-  private func changeVPNStatus() async {
-    guard !vpnBusy, !stoppingVPN else { return }
+  private func stopVPN() async {
     attemptID = UUID()
-    if vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting {
-      finishStartup()
-      startingFingerprint = nil
-      stoppingVPN = true
-      do {
-        if manager?.isOnDemandEnabled == true { try await disarmRecovery() }
-      } catch {
-        stoppingVPN = false
-        self.error = "Не удалось отключить автовосстановление VPN. Повторите попытку."
-        return
-      }
-      (manager?.connection as? NETunnelProviderSession)?.stopTunnel()
-      await core.record("vpn_stop")
-      syncVPNStatus()
+    let active = vpnStatus.isActiveTunnel
+    finishStartup()
+    startingFingerprint = nil
+    startupReport = nil
+    stoppingVPN = active || vpnStatus == .disconnecting
+    do {
+      if manager?.isOnDemandEnabled == true { try await disarmRecovery() }
+    } catch {
+      stoppingVPN = false
+      self.error = "Не удалось отключить автовосстановление VPN. Повторите попытку."
       return
     }
-    guard state.selected != nil, vpnStatus != .disconnecting else { return }
+    if active {
+      manager?.connection.stopVPNTunnel()
+      await core.record("vpn_stop")
+    }
+    syncVPNStatus()
+  }
+
+  private func startVPN() async {
+    guard state.selected != nil, !vpnStatus.isActiveTunnel, vpnStatus != .disconnecting else { return }
+    attemptID = UUID()
+    startupReport = nil
     vpnBusy = true
     defer { vpnBusy = false }
     mayRetryExtension = true
     await core.record("vpn_request")
     await launchVPN()
+  }
+
+  func runCommand(_ command: VPNCommand) async throws -> VPNCommand.Result {
+    guard !runningCommand, !restartingVPN, !vpnBusy, !busy else {
+      throw ClientMessage(text: "HyRoute уже меняет настройки или подключение. Повторите команду чуть позже.")
+    }
+    runningCommand = true
+    defer { runningCommand = false }
+    error = nil
+    if !ready { await load() }
+    guard ready else { throw ClientMessage(text: error ?? "Не удалось открыть хранилище HyRoute.") }
+    if !stoppingVPN && startup == nil {
+      manager = try await vpnManager()
+    }
+    syncVPNStatus()
+    return try await command.perform(on: self)
+  }
+
+  var commandProfileID: String? { state.selected?.id }
+
+  func startForCommand() async throws {
+    guard state.selected != nil else { throw ClientMessage(text: "Добавьте подписку и выберите сервер в HyRoute.") }
+    await startVPN()
+    if let error { throw ClientMessage(text: error) }
+  }
+
+  func stopForCommand() async throws {
+    await stopVPN()
+    if let error { throw ClientMessage(text: error) }
+  }
+
+  func selectForCommand(_ id: String) async throws {
+    guard state.profiles.contains(where: { $0.id == id }) else {
+      throw ClientMessage(text: "Сервер больше недоступен. Выберите другой сервер в команде.")
+    }
+    if state.settings.selected == id { return }
+    guard await select(id, reportError: false) else {
+      throw ClientMessage(text: "Не удалось сохранить сервер.")
+    }
+  }
+
+  func waitForCommandStatus(connected: Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(connected ? 45 : 10)
+    while true {
+      syncVPNStatus()
+      if connected {
+        if vpnStatus == .connected { return }
+        if startupReport == nil && !vpnBusy, let error { throw ClientMessage(text: error) }
+      } else if vpnStatus == .disconnected || vpnStatus == .invalid {
+        return
+      }
+      guard ContinuousClock.now < deadline else {
+        throw ClientMessage(text: connected ? "iOS не подтвердила подключение VPN." : "iOS ещё отключает VPN.")
+      }
+      try await Task.sleep(for: .milliseconds(200))
+    }
   }
 
   private func launchVPN() async {
@@ -587,8 +650,10 @@ final class Client: ObservableObject {
   private func reportDisconnect(_ connection: NEVPNConnection, event: String, message: String) {
     error = message
     let attempt = attemptID
+    if event == "vpn_start_failed" { startupReport = attempt }
     Task { [weak self] in
       guard let self else { return }
+      defer { if self.startupReport == attempt { self.startupReport = nil } }
       await self.core.record(event)
       do {
         try await connection.fetchLastDisconnectError()
@@ -701,10 +766,10 @@ final class Client: ObservableObject {
     }
   }
 
-  func select(_ id: String) async -> Bool {
+  func select(_ id: String, reportError: Bool = true) async -> Bool {
     var next = state.settings
     next.selected = id
-    return await save(next)
+    return await save(next, reportError: reportError)
   }
 
   func saveRouting(_ routing: Routing, reportError: Bool = true) async -> Bool {
