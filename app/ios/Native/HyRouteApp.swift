@@ -99,7 +99,7 @@ private struct RootView: View {
     Group {
       if client.ready {
         ZStack {
-          panel(.home) { Dashboard(client: client, openRules: { tab = .rules }) }
+          panel(.home) { Dashboard(client: client) }
           panel(.subscriptions) {
             if previewScreen == "servers", let id = client.state.subscriptions.first?.id {
               SubscriptionPage(client: client, id: id)
@@ -213,80 +213,7 @@ private struct RootView: View {
   }
 }
 
-private struct Dashboard: View {
-  @ObservedObject var client: Client
-  let openRules: () -> Void
-  @State private var choosingProfile = false
-  @State private var importing = false
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        ConnectionStatus(client: client)
-        VStack(spacing: 8) {
-          HyHeading(text: "Основной профиль")
-          if let selected = client.state.selected {
-            Button { choosingProfile = true } label: {
-              HStack(spacing: 8) {
-                ProfileRow(profile: selected)
-                Image(systemName: "chevron.up.chevron.down")
-                  .font(.footnote.weight(.semibold)).foregroundStyle(HyStyle.muted)
-              }
-              .hyCard()
-              .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("profilePicker")
-          } else {
-            Button { importing = true } label: {
-              HyRow(title: "Добавить подписку", symbol: "plus").hyCard()
-            }
-            .buttonStyle(.plain)
-          }
-        }
-        VStack(spacing: 0) {
-          Button(action: openRules) {
-            HyRow(title: "Маршрутизация", symbol: "arrow.triangle.branch",
-                  detail: "Всё остальное · \(client.state.settings.routing.defaultAction.label)")
-          }
-          .buttonStyle(.plain)
-          Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
-          NavigationLink {
-            VPNJournalPage(client: client)
-          } label: {
-            HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle")
-          }
-          .buttonStyle(.plain)
-          Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
-          NavigationLink {
-            TrafficJournalPage(client: client)
-          } label: {
-            HyRow(title: "Журнал подключений", symbol: "waveform.path",
-                  detail: "Адреса, правила, узлы и ошибки")
-          }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("traffic-journal")
-          Divider().overlay(HyStyle.stroke).padding(.vertical, 6)
-          NavigationLink {
-            VPNRecoveryPage(client: client)
-          } label: {
-            HyRow(title: "Защита VPN", symbol: "shield", detail: client.autoReconnect ? "Автовосстановление включено" : nil)
-          }
-          .buttonStyle(.plain)
-        }
-        .hyCard(padding: 12)
-      }
-      .padding(16)
-    }
-    .hyScreen()
-    .navigationTitle("HyRoute")
-    .navigationBarTitleDisplayMode(.inline)
-    .sheet(isPresented: $choosingProfile) { ProfilePicker(client: client) }
-    .sheet(isPresented: $importing) { ImportSheet(client: client) }
-  }
-}
-
-private struct VPNRecoveryPage: View {
+struct VPNRecoveryPage: View {
   @ObservedObject var client: Client
 
   var body: some View {
@@ -309,68 +236,15 @@ private struct VPNRecoveryPage: View {
   }
 }
 
-private struct ConnectionStatus: View {
-  @ObservedObject var client: Client
-
-  private var isActive: Bool {
-    [.connected, .connecting, .reasserting].contains(client.vpnStatus)
-  }
-
-  private var statusLabel: String {
-    if client.vpnBusy { return "Запуск VPN…" }
-    switch client.vpnStatus {
-    case .connected: return "VPN включён"
-    case .connecting: return "Подключение…"
-    case .reasserting: return "Восстанавливаем VPN…"
-    case .disconnecting: return "Отключение…"
-    default: return "VPN выключен"
-    }
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      HStack(spacing: 14) {
-        HyIcon(symbol: "lock.shield", size: 48)
-        VStack(alignment: .leading, spacing: 3) {
-          Text(statusLabel).font(.title3.weight(.bold)).foregroundStyle(HyStyle.ink)
-          if client.state.selected == nil && !isActive {
-            Text("Добавьте подписку для подключения.")
-              .font(.subheadline).foregroundStyle(HyStyle.muted)
-          }
-        }
-        Spacer(minLength: 0)
-        if client.vpnStatus == .connected {
-          Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
-            .accessibilityHidden(true)
-        } else if client.vpnBusy || client.vpnStatus == .connecting || client.vpnStatus == .reasserting {
-          ProgressView().tint(HyStyle.accent)
-        }
-      }
-      Button { Task { await client.toggleVPN() } } label: {
-        Label(isActive ? "Отключить" : "Подключить", systemImage: "power")
-      }
-      .buttonStyle(HyButton(prominent: !isActive))
-      .disabled(client.vpnBusy || client.vpnStatus == .disconnecting || (client.state.selected == nil && !isActive))
-    }
-    .hyCard(padding: 16)
-  }
-}
-
 struct ProfileRow: View {
   let profile: VPNProfile
   var selected = false
-
-  private var displayTitle: String {
-    let parts = profile.title.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
-    let title = parts.filter { $0.compare(profile.transport, options: .caseInsensitive) != .orderedSame }
-    return title.isEmpty ? profile.title : title.joined(separator: " · ")
-  }
 
   var body: some View {
     HStack(spacing: 12) {
       HyIcon(symbol: profile.balance == true ? "bolt.fill" : "server.rack")
       VStack(alignment: .leading, spacing: 3) {
-        Text(displayTitle).font(.body.weight(.semibold))
+        Text(profile.displayTitle).font(.body.weight(.semibold))
           .foregroundStyle(HyStyle.ink).lineLimit(2)
         Text(profile.missing == true ? "Сервер недоступен" : profile.transport)
           .font(.subheadline).foregroundStyle(HyStyle.muted).lineLimit(1)
@@ -484,7 +358,7 @@ private struct SubscriptionProbe {
   let id: String
 }
 
-private struct SubscriptionPage: View {
+struct SubscriptionPage: View {
   @ObservedObject var client: Client
   let id: String
   @State private var measurement: SubscriptionProbe?
@@ -651,7 +525,7 @@ private struct SubscriptionPage: View {
   }
 }
 
-private struct ImportSheet: View {
+struct ImportSheet: View {
   @ObservedObject var client: Client
   @Environment(\.dismiss) private var dismiss
   @State private var input = ""
@@ -692,7 +566,7 @@ private struct ImportSheet: View {
               }
             }
           } label: {
-            if client.busy { ProgressView().tint(.white) }
+            if client.busy { ProgressView().tint(HyStyle.onFill) }
             else { Label("Импортировать", systemImage: "arrow.down") }
           }
           .buttonStyle(HyButton())

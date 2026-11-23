@@ -75,10 +75,30 @@ final class SubscriptionAndRulesTests: XCTestCase {
 
   func testOpensTrafficJournalFromHome() {
     let app = launch()
+    tap(app.buttons["dashboard-settings"])
     tap(app.buttons["traffic-journal"])
     XCTAssertTrue(app.navigationBars["Журнал подключений"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.switches["trafficLogging"].exists)
     XCTAssertTrue(app.segmentedControls.buttons["Ошибки и блокировки"].exists)
+  }
+
+  func testSelectsServerFromSubscriptionOnHome() {
+    let app = launch(screen: "routes-test")
+    let status = app.staticTexts["dashboard-vpn-status"]
+    XCTAssertTrue(status.waitForExistence(timeout: 10))
+    XCTAssertEqual(status.label, "VPN выключен")
+    XCTAssertTrue(app.buttons["dashboard-vpn-button"].isHittable)
+
+    let server = app.buttons["dashboard-profile-demo-entry"]
+    XCTAssertFalse(server.exists)
+    tap(app.buttons["dashboard-subscription-demo"])
+    tap(server)
+
+    let picker = app.buttons["profilePicker"]
+    let selection = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", "Запасной сервер"), object: picker)
+    XCTAssertEqual(XCTWaiter.wait(for: [selection], timeout: 10), .completed)
+    XCTAssertTrue(app.navigationBars["HyRoute"].exists)
   }
 
   func testDeletesSavedChainAndKeepsItsServers() {

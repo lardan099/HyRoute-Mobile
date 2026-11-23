@@ -124,6 +124,12 @@ struct VPNProfile: Decodable, Identifiable {
     if balance == true { return "VLESS · \(balanceStrategy ?? "leastLoad")" }
     return `protocol` == "vless" ? "VLESS" : "Hysteria 2"
   }
+
+  var displayTitle: String {
+    let parts = title.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    let distinct = parts.filter { $0.compare(transport, options: .caseInsensitive) != .orderedSame }
+    return distinct.isEmpty ? title : distinct.joined(separator: " · ")
+  }
 }
 
 struct ServerGroup: Codable, Identifiable {
