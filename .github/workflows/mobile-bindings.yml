@@ -34,7 +34,7 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.platform == 'iOS' && inputs.ios_runner || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.platform == 'iOS' && inputs.ios_runner == 'macos-26-intel' && 50 || 30 }}
+    timeout-minutes: ${{ matrix.platform == 'iOS' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -206,28 +206,20 @@ jobs:
           name: HyRoute-App-${{ matrix.platform }}
           path: ${{ env.HYROUTE_APP_PACKAGE }}
           if-no-files-found: error
-      - name: Test SwiftUI and capture iPhone previews
+      - name: Build simulator app and capture iPhone previews
+        id: ios_previews
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios
-        timeout-minutes: ${{ inputs.ios_runner == 'macos-26-intel' && 28 || 21 }}
+        timeout-minutes: 12
         shell: bash
         run: |
           device="$HYROUTE_SIMULATOR"
-          compact=""
-          trap 'xcrun simctl shutdown "$device" >/dev/null 2>&1 || true; if [[ -n "$compact" ]]; then xcrun simctl shutdown "$compact" >/dev/null 2>&1 || true; fi' EXIT
           output="$RUNNER_TEMP/hyroute-iphonesimulator"
           xcrun simctl bootstatus "$device" -b
           xcrun simctl ui "$device" appearance dark
           xcodebuild -project HyRoute.xcodeproj -scheme HyRoute -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" \
             -derivedDataPath "$output" CODE_SIGN_IDENTITY=- -quiet build-for-testing
-          status=0
-          xcodebuild -project HyRoute.xcodeproj -scheme HyRoute -configuration Debug \
-            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
-            -derivedDataPath "$output" -resultBundlePath "$RUNNER_TEMP/hyroute-ui.xcresult" \
-            -skip-testing:HyRouteUITests/CompactLayoutTests \
-            CODE_SIGN_IDENTITY=- -quiet test-without-building || status=$?
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/hyroute-ui.xcresult" || true
           bundle="$output/Build/Products/Debug-iphonesimulator/HyRoute.app"
           test -d "$bundle"
           xcrun simctl install "$device" "$bundle"
@@ -238,6 +230,38 @@ jobs:
             xcrun simctl io "$device" screenshot "../../dist/HyRoute-iOS-$screen-$HYROUTE_APP_VERSION.png"
           done
           printf 'HYROUTE_APP_PREVIEW=dist/HyRoute-iOS-*-%s.png\n' "$HYROUTE_APP_VERSION" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.ios_previews.outcome == 'success'
+        with:
+          name: HyRoute-iOS-preview
+          path: ${{ env.HYROUTE_APP_PREVIEW }}
+          if-no-files-found: error
+      - name: Test SwiftUI flows on iPhone
+        if: steps.ios_previews.outcome == 'success'
+        working-directory: app/ios
+        timeout-minutes: ${{ inputs.ios_runner == 'macos-26-intel' && 20 || 14 }}
+        shell: bash
+        run: |
+          device="$HYROUTE_SIMULATOR"
+          output="$RUNNER_TEMP/hyroute-iphonesimulator"
+          status=0
+          xcodebuild -project HyRoute.xcodeproj -scheme HyRoute -configuration Debug \
+            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
+            -derivedDataPath "$output" -resultBundlePath "$RUNNER_TEMP/hyroute-ui.xcresult" \
+            -skip-testing:HyRouteUITests/CompactLayoutTests \
+            CODE_SIGN_IDENTITY=- -quiet test-without-building || status=$?
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/hyroute-ui.xcresult" || true
+          exit "$status"
+      - name: Test compact iPhone with accessibility text
+        if: ${{ !cancelled() && steps.ios_previews.outcome == 'success' }}
+        working-directory: app/ios
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          device="$HYROUTE_SIMULATOR"
+          output="$RUNNER_TEMP/hyroute-iphonesimulator"
+          compact=""
+          trap 'if [[ -n "$compact" ]]; then xcrun simctl shutdown "$compact" >/dev/null 2>&1 || true; fi' EXIT
           runtime="$(xcrun simctl list devices booted -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(k for k, v in d.items() if any(x["udid"] == sys.argv[1] for x in v)))' "$device")"
           if ! compact="$(xcrun simctl create "HyRoute compact" 'com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation' "$runtime")"; then
             compact="$(xcrun simctl create "HyRoute compact" 'com.apple.CoreSimulator.SimDeviceType.iPhone-16e' "$runtime")"
@@ -247,13 +271,7 @@ jobs:
           xcrun simctl bootstatus "$compact" -b
           xcrun simctl ui "$compact" appearance light
           xcrun simctl ui "$compact" content_size accessibility-large
-          compact_status=0
-          xcodebuild -project HyRoute.xcodeproj -scheme HyRoute -configuration Debug \
-            -destination "platform=iOS Simulator,id=$compact" -parallel-testing-enabled NO \
-            -derivedDataPath "$output" -resultBundlePath "$RUNNER_TEMP/hyroute-compact.xcresult" \
-            -only-testing:HyRouteUITests/CompactLayoutTests \
-            CODE_SIGN_IDENTITY=- -quiet test-without-building || compact_status=$?
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/hyroute-compact.xcresult" || true
+          bundle="$output/Build/Products/Debug-iphonesimulator/HyRoute.app"
           xcrun simctl install "$compact" "$bundle"
           for screen in home rules chains; do
             SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
@@ -261,10 +279,18 @@ jobs:
             sleep 3
             xcrun simctl io "$compact" screenshot "../../dist/HyRoute-iOS-compact-$screen-$HYROUTE_APP_VERSION.png"
           done
-          [[ "$status" -eq 0 && "$compact_status" -eq 0 ]]
+          printf 'HYROUTE_COMPACT_PREVIEW=dist/HyRoute-iOS-compact-*-%s.png\n' "$HYROUTE_APP_VERSION" >> "$GITHUB_ENV"
+          status=0
+          xcodebuild -project HyRoute.xcodeproj -scheme HyRoute -configuration Debug \
+            -destination "platform=iOS Simulator,id=$compact" -parallel-testing-enabled NO \
+            -derivedDataPath "$output" -resultBundlePath "$RUNNER_TEMP/hyroute-compact.xcresult" \
+            -only-testing:HyRouteUITests/CompactLayoutTests \
+            CODE_SIGN_IDENTITY=- -quiet test-without-building || status=$?
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/hyroute-compact.xcresult" || true
+          exit "$status"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && env.HYROUTE_APP_PREVIEW != ''
+        if: always() && env.HYROUTE_COMPACT_PREVIEW != ''
         with:
-          name: HyRoute-iOS-preview
-          path: ${{ env.HYROUTE_APP_PREVIEW }}
+          name: HyRoute-iOS-compact-preview
+          path: ${{ env.HYROUTE_COMPACT_PREVIEW }}
           if-no-files-found: error

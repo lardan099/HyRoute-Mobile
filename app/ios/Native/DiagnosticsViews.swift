@@ -305,7 +305,7 @@ struct TrafficJournalPage: View {
       }
       .accessibilityIdentifier("traffic-menu")
     }
-    .confirmationDialog("Очистить журнал подключений?", isPresented: $confirmingClear, titleVisibility: .visible) {
+    .alert("Очистить журнал подключений?", isPresented: $confirmingClear) {
       Button("Очистить", role: .destructive) {
         Task { await perform { try await client.clearTrafficLog() } }
       }
