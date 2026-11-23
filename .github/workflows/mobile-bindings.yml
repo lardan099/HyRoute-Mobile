@@ -15,6 +15,13 @@ on:
           - Both
           - Android
           - iOS
+      ios_runner:
+        description: Standard macOS runner for iOS builds
+        type: choice
+        default: macos-latest
+        options:
+          - macos-latest
+          - macos-26-intel
 
 permissions:
   contents: read
@@ -22,7 +29,7 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.platform }}
-    runs-on: ${{ matrix.platform == 'iOS' && 'macos-latest' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.platform == 'iOS' && inputs.ios_runner || 'ubuntu-24.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
