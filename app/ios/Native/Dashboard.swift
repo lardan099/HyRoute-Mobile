@@ -3,6 +3,7 @@ import SwiftUI
 
 struct Dashboard: View {
   @ObservedObject var client: Client
+  @ObservedObject var measurements: SubscriptionMeasurements
   @State private var choosingProfile = false
   @State private var importing = false
 
@@ -18,7 +19,7 @@ struct Dashboard: View {
               .accessibilityAddTraits(.isHeader)
               .padding(.bottom, 3)
             ForEach(client.state.subscriptions) { item in
-              DashboardSubscription(client: client, item: item, selectedID: selectedID)
+              DashboardSubscription(client: client, measurements: measurements, item: item, selectedID: selectedID)
             }
           }
         }
@@ -125,6 +126,7 @@ struct Dashboard: View {
 
 private struct DashboardSubscription: View {
   @ObservedObject var client: Client
+  @ObservedObject var measurements: SubscriptionMeasurements
   let item: Subscription
   let selectedID: String?
   @State private var expansion: Bool?
@@ -132,6 +134,7 @@ private struct DashboardSubscription: View {
   var body: some View {
     let available = item.servers.filter { $0.missing != true }
     let expanded = expansion ?? available.contains { $0.id == selectedID }
+    let measuring = measurements.request?.subscriptionID == item.id
     return LazyVStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 8) {
         Button { expansion = !expanded } label: {
@@ -158,64 +161,94 @@ private struct DashboardSubscription: View {
               .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .disabled(client.busy)
+          .disabled(client.busy || measuring)
           .accessibilityLabel("Обновить подписку \(item.name)")
         }
-        NavigationLink {
-          SubscriptionPage(client: client, id: item.id)
+        Button {
+          if measuring { measurements.cancel() }
+          else {
+            expansion = true
+            measurements.start(item)
+          }
         } label: {
-          Image(systemName: "speedometer").font(.subheadline.weight(.semibold))
+          Image(systemName: measuring ? "stop.circle" : "speedometer").font(.subheadline.weight(.semibold))
             .foregroundStyle(HyStyle.accent).frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Задержка серверов \(item.name)")
-        .accessibilityIdentifier("dashboard-server-details-\(item.id)")
+        .disabled(!measuring && (client.busy || measurements.request != nil || available.isEmpty))
+        .accessibilityLabel(measuring ? "Остановить замер" : "Проверить серверы \(item.name)")
+        .accessibilityIdentifier("dashboard-probe-\(item.id)")
       }
       .padding(.horizontal, 12).padding(.vertical, 5)
       if expanded {
         Divider().overlay(HyStyle.stroke)
-        if let used = item.usedBytes, let limit = item.limitBytes, limit > 0 {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("\(bytes(used)) из \(bytes(limit))")
-              .font(.caption.monospacedDigit()).foregroundStyle(HyStyle.muted)
-            ProgressView(value: min(max(Double(used) / Double(limit), 0), 1))
-              .accessibilityLabel("Трафик подписки")
-          }
-          .padding(.horizontal, 15).padding(.vertical, 12)
+        if measuring {
+          ProgressView().tint(HyStyle.accent).accessibilityLabel("Идёт замер задержки")
+            .padding(.horizontal, 15).padding(.vertical, 8)
+        }
+        if measurements.failedSubscription == item.id {
+          Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
+            .padding(.horizontal, 15).padding(.vertical, 8)
+        }
+        if item.hasMetadata {
+          SubscriptionDetails(item: item, embedded: true)
+            .padding(.horizontal, 15).padding(.vertical, 10)
+          Divider().overlay(HyStyle.stroke).padding(.horizontal, 15)
         }
         ForEach(available) { profile in
-          Button { Task { _ = await client.select(profile.id) } } label: {
-            HStack(spacing: 10) {
-              VStack(alignment: .leading, spacing: 3) {
-                Text(profile.displayTitle).font(.subheadline.weight(.semibold))
-                  .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)
-                Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
-              }
-              Spacer(minLength: 0)
-              if selectedID == profile.id {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
-                  .accessibilityHidden(true)
-              }
-            }
-            .frame(minHeight: 49).contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .disabled(client.busy)
-          .accessibilityAddTraits(selectedID == profile.id ? .isSelected : [])
-          .accessibilityIdentifier("dashboard-profile-\(profile.id)")
-          .padding(.horizontal, 15)
-          if profile.id != available.last?.id {
-            Divider().overlay(HyStyle.stroke).padding(.horizontal, 15)
-          }
+          profileRow(profile).padding(.horizontal, 15)
+          Divider().overlay(HyStyle.stroke).padding(.horizontal, 15)
         }
+        NavigationLink {
+          SubscriptionPage(client: client, id: item.id, measurements: measurements)
+        } label: {
+          HStack(spacing: 8) {
+            Text("Серверы и отдельные замеры").font(.subheadline.weight(.medium))
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).accessibilityHidden(true)
+          }
+          .foregroundStyle(HyStyle.accent)
+          .frame(minHeight: 44)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("dashboard-server-details-\(item.id)")
+        .padding(.horizontal, 15)
       }
     }
     .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 16))
   }
 
-  private func bytes(_ count: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: count, countStyle: .binary)
+  private func profileRow(_ profile: VPNProfile) -> some View {
+    let rows = measurements.results[profile.id] ?? []
+    let delay = profile.balance == true && !rows.isEmpty ? ProbeSnapshot.groupLabel(rows) : rows.first?.label
+    let selected = selectedID == profile.id
+    return Button { Task { _ = await client.select(profile.id) } } label: {
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(profile.displayTitle).font(.subheadline.weight(.semibold))
+            .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)
+          Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
+          if let delay {
+            Text(delay).font(.caption.monospacedDigit())
+              .foregroundStyle(rows.contains { $0.ms != nil } ? HyStyle.success : HyStyle.muted)
+              .accessibilityHidden(true)
+          }
+        }
+        Spacer(minLength: 0)
+        if selected {
+          Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
+            .accessibilityHidden(true)
+        }
+      }
+      .frame(minHeight: 49).contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(client.busy)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+    .accessibilityIdentifier("dashboard-profile-\(profile.id)")
+    .accessibilityValue(delay ?? "")
   }
 }
 

@@ -29,6 +29,79 @@ struct ProbeSnapshot: Decodable {
 
   let done: Bool
   let results: [Row]
+
+  static func groupLabel(_ rows: [Row]) -> String {
+    if rows.contains(where: { ["running", "pending"].contains($0.status) }) { return "Проверка узлов…" }
+    let values = rows.compactMap(\.ms)
+    if let best = values.min() { return "\(values.count) из \(rows.count) · от \(best) мс" }
+    return "Узлы не ответили"
+  }
+}
+
+@MainActor
+final class SubscriptionMeasurements: ObservableObject {
+  struct Request {
+    let token = UUID()
+    let subscriptionID: String
+    let scope: String
+    let target: String
+    let previousResults: [String: [ProbeSnapshot.Row]]
+  }
+
+  @Published private(set) var request: Request?
+  @Published private(set) var results: [String: [ProbeSnapshot.Row]] = [:]
+  @Published private(set) var failedSubscription: String?
+
+  func start(_ subscription: Subscription, profile: VPNProfile? = nil) {
+    guard request == nil else { return }
+    failedSubscription = nil
+    let previous = results
+    let targets = Set(profile.map { [$0.id] } ?? subscription.servers.map(\.id))
+    results = results.filter { !targets.contains($0.key) }
+    request = Request(subscriptionID: subscription.id, scope: profile == nil ? "subscription" : "profile",
+                      target: profile?.id ?? subscription.id, previousResults: previous)
+  }
+
+  func cancel() {
+    guard let request else { return }
+    let completed = results.compactMapValues { rows -> [ProbeSnapshot.Row]? in
+      let final = rows.filter { !["pending", "running"].contains($0.status) }
+      return final.isEmpty ? nil : final
+    }
+    results = request.previousResults.merging(completed) { _, newer in newer }
+    self.request = nil
+  }
+
+  func run(_ task: Request, using client: Client) async {
+    defer {
+      if request?.token == task.token {
+        if Task.isCancelled { cancel() }
+        else { request = nil }
+      }
+    }
+    do {
+      let handle = try await client.probeHandle(scope: task.scope, id: task.target)
+      do {
+        try Task.checkCancellation()
+        var current = try await handle.start()
+        while !Task.isCancelled && request?.token == task.token {
+          results.merge(Dictionary(grouping: current.results, by: \.profileId)) { _, updated in updated }
+          if current.done { break }
+          try await Task.sleep(for: .milliseconds(400))
+          current = try await handle.status()
+        }
+      } catch {
+        await handle.cancel()
+        throw error
+      }
+      await handle.cancel()
+    } catch {
+      if !Task.isCancelled && request?.token == task.token {
+        cancel()
+        failedSubscription = task.subscriptionID
+      }
+    }
+  }
 }
 
 @MainActor

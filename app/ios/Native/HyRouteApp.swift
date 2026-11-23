@@ -67,6 +67,7 @@ private struct RootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var tab: Tab = .home
   @State private var keyboardVisible = false
+  @StateObject private var measurements = SubscriptionMeasurements()
 
   private var previewScreen: String? {
     #if targetEnvironment(simulator)
@@ -103,13 +104,13 @@ private struct RootView: View {
           panel(.home) {
             if previewScreen == "vpn-log" { VPNJournalPage(client: client) }
             else if previewScreen == "traffic" { TrafficJournalPage(client: client) }
-            else { Dashboard(client: client) }
+            else { Dashboard(client: client, measurements: measurements) }
           }
           panel(.subscriptions) {
             if previewScreen == "servers", let id = client.state.subscriptions.first?.id {
-              SubscriptionPage(client: client, id: id)
+              SubscriptionPage(client: client, id: id, measurements: measurements)
             } else {
-              SubscriptionsPage(client: client)
+              SubscriptionsPage(client: client, measurements: measurements)
             }
           }
           panel(.rules) { RulesPage(client: client, preview: previewScreen) }
@@ -163,6 +164,9 @@ private struct RootView: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
       keyboardVisible = false
+    }
+    .task(id: measurements.request?.token) {
+      if let request = measurements.request { await measurements.run(request, using: client) }
     }
     .task(id: client.ready && scenePhase == .active) {
       guard client.ready, scenePhase == .active, previewScreen == nil else { return }
@@ -323,6 +327,7 @@ struct ProfilePicker: View {
 
 private struct SubscriptionsPage: View {
   @ObservedObject var client: Client
+  @ObservedObject var measurements: SubscriptionMeasurements
   @State private var adding = false
 
   var body: some View {
@@ -354,7 +359,7 @@ private struct SubscriptionsPage: View {
         Section("Мои подписки") {
           ForEach(client.state.subscriptions) { item in
             NavigationLink {
-              SubscriptionPage(client: client, id: item.id)
+              SubscriptionPage(client: client, id: item.id, measurements: measurements)
             } label: {
               HyRow(title: item.name, symbol: "link",
                     detail: "Серверов: \(item.servers.filter { $0.missing != true }.count)", disclosure: false)
@@ -379,27 +384,19 @@ private struct SubscriptionsPage: View {
   }
 }
 
-private struct SubscriptionProbe {
-  let token = UUID()
-  let scope: String
-  let id: String
-  let previousResults: [String: [ProbeSnapshot.Row]]
-}
-
 struct SubscriptionPage: View {
   @ObservedObject var client: Client
   let id: String
-  @State private var measurement: SubscriptionProbe?
-  @State private var results: [String: [ProbeSnapshot.Row]] = [:]
+  @ObservedObject var measurements: SubscriptionMeasurements
   @State private var expandedGroups: Set<String> = []
-  @State private var measurementError = false
+
+  private var runningHere: Bool { measurements.request?.subscriptionID == id }
 
   var body: some View {
     if let item = client.state.subscriptions.first(where: { $0.id == id }) {
       ScrollView {
         VStack(alignment: .leading, spacing: 12) {
-          if item.refreshFailed == true || (item.refreshedAt ?? 0) > 0 ||
-              item.usedBytes != nil || item.limitBytes != nil || (item.expiresAt ?? 0) > 0 {
+          if item.hasMetadata {
             SubscriptionDetails(item: item)
           }
           if item.servers.isEmpty {
@@ -408,7 +405,7 @@ struct SubscriptionPage: View {
           } else {
             LazyVStack(spacing: 0) {
               ForEach(item.servers) { profile in
-                serverRow(profile)
+                serverRow(profile, in: item)
                 if profile.id != item.servers.last?.id {
                   Divider().overlay(HyStyle.stroke).padding(.leading, 52)
                 }
@@ -433,13 +430,10 @@ struct SubscriptionPage: View {
               if client.busy { ProgressView().tint(HyStyle.accent) }
               else { Label("Обновить подписку", systemImage: "arrow.clockwise") }
             }
-            .disabled(client.busy || measurement != nil)
+            .disabled(client.busy || runningHere)
             .accessibilityIdentifier("subscription-refresh")
           }
         }
-      }
-      .task(id: measurement?.token) {
-        if let measurement { await measure(measurement) }
       }
     } else {
       Text("Подписка недоступна").foregroundStyle(HyStyle.muted)
@@ -451,20 +445,20 @@ struct SubscriptionPage: View {
 
   private func probeControls(_ item: Subscription) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      if measurement != nil {
+      if runningHere {
         ProgressView().tint(HyStyle.accent).accessibilityLabel("Идёт замер задержки")
       }
       Button {
-        if measurement != nil { cancelMeasurement() }
-        else { startMeasurement(scope: "subscription", id: id) }
+        if runningHere { measurements.cancel() }
+        else { measurements.start(item) }
       } label: {
-        Label(measurement == nil ? "Проверить все" : "Остановить",
-              systemImage: measurement == nil ? "speedometer" : "stop.circle")
+        Label(runningHere ? "Остановить" : "Проверить все",
+              systemImage: runningHere ? "stop.circle" : "speedometer")
       }
-      .buttonStyle(HyButton(prominent: measurement == nil))
+      .buttonStyle(HyButton(prominent: !runningHere))
       .accessibilityIdentifier("subscription-check-all")
-      .disabled(measurement == nil && (client.busy || !item.servers.contains { $0.missing != true }))
-      if measurementError {
+      .disabled(!runningHere && (client.busy || measurements.request != nil || !item.servers.contains { $0.missing != true }))
+      if measurements.failedSubscription == id {
         Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
           .accessibilityIdentifier("subscription-probe-error")
       }
@@ -474,8 +468,8 @@ struct SubscriptionPage: View {
     .background(HyStyle.canvas)
   }
 
-  private func serverRow(_ profile: VPNProfile) -> some View {
-    let rows = results[profile.id] ?? []
+  private func serverRow(_ profile: VPNProfile, in item: Subscription) -> some View {
+    let rows = measurements.results[profile.id] ?? []
     return VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 6) {
         Button { Task { _ = await client.select(profile.id) } } label: {
@@ -485,7 +479,10 @@ struct SubscriptionPage: View {
         .disabled(client.busy || profile.missing == true)
         .accessibilityIdentifier("subscription-profile-\(profile.id)")
         if profile.missing != true {
-          Button { startMeasurement(scope: "profile", id: profile.id) } label: {
+          Button {
+            if profile.balance == true { expandedGroups.insert(profile.id) }
+            measurements.start(item, profile: profile)
+          } label: {
             Image(systemName: "speedometer")
               .font(.body.weight(.semibold))
               .foregroundStyle(HyStyle.accent)
@@ -493,7 +490,7 @@ struct SubscriptionPage: View {
               .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .disabled(client.busy || measurement != nil)
+          .disabled(client.busy || measurements.request != nil)
           .accessibilityLabel(profile.balance == true ? "Проверить узлы группы" : "Проверить задержку")
           .accessibilityIdentifier("subscription-check-\(profile.id)")
         }
@@ -513,7 +510,7 @@ struct SubscriptionPage: View {
             .padding(.vertical, 4)
           }
         } label: {
-          Text(groupResult(rows)).accessibilityIdentifier("subscription-result-\(profile.id)")
+          Text(ProbeSnapshot.groupLabel(rows)).accessibilityIdentifier("subscription-result-\(profile.id)")
         }
         .font(.subheadline)
         .foregroundStyle(HyStyle.muted)
@@ -527,60 +524,6 @@ struct SubscriptionPage: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-  }
-
-  private func groupResult(_ rows: [ProbeSnapshot.Row]) -> String {
-    if rows.contains(where: { $0.status == "running" || $0.status == "pending" }) { return "Проверка узлов…" }
-    let values = rows.compactMap(\.ms)
-    if let best = values.min() { return "\(values.count) из \(rows.count) · от \(best) мс" }
-    return "Узлы не ответили"
-  }
-
-  private func startMeasurement(scope: String, id: String) {
-    measurementError = false
-    let previous = results
-    if scope == "subscription" { results.removeAll() }
-    else {
-      results.removeValue(forKey: id)
-      expandedGroups.insert(id)
-    }
-    measurement = SubscriptionProbe(scope: scope, id: id, previousResults: previous)
-  }
-
-  private func cancelMeasurement() {
-    guard let request = measurement else { return }
-    let completed = results.compactMapValues { rows -> [ProbeSnapshot.Row]? in
-      let final = rows.filter { !["pending", "running"].contains($0.status) }
-      return final.isEmpty ? nil : final
-    }
-    results = request.previousResults.merging(completed) { _, newer in newer }
-    measurement = nil
-  }
-
-  private func measure(_ request: SubscriptionProbe) async {
-    defer { if measurement?.token == request.token { measurement = nil } }
-    do {
-      let handle = try await client.probeHandle(scope: request.scope, id: request.id)
-      do {
-        try Task.checkCancellation()
-        var current = try await handle.start()
-        while !Task.isCancelled && measurement?.token == request.token {
-          results.merge(Dictionary(grouping: current.results, by: \.profileId)) { _, updated in updated }
-          if current.done { break }
-          try await Task.sleep(for: .milliseconds(400))
-          current = try await handle.status()
-        }
-      } catch {
-        await handle.cancel()
-        throw error
-      }
-      await handle.cancel()
-    } catch {
-      if !Task.isCancelled && measurement?.token == request.token {
-        cancelMeasurement()
-        measurementError = true
-      }
-    }
   }
 }
 

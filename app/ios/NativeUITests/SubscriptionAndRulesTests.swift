@@ -266,6 +266,22 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(app.buttons["dashboard-profile-demo-entry"].isHittable)
   }
 
+  func testChecksSubscriptionOnHomeAndSharesResultsWithServerDetails() {
+    let app = launch()
+    tap(app.buttons["dashboard-subscription-preview"])
+    tap(app.buttons["dashboard-probe-preview"])
+    let server = app.buttons["dashboard-profile-fi"]
+    let measured = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "42 мс"), object: server)
+    XCTAssertEqual(XCTWaiter.wait(for: [measured], timeout: 10), .completed)
+    XCTAssertTrue(app.navigationBars["HyRoute"].exists)
+    let details = app.buttons["dashboard-server-details-preview"]
+    for _ in 0..<4 where !details.isHittable { app.scrollViews.firstMatch.swipeUp() }
+    tap(details)
+    let result = app.staticTexts["subscription-result-fi"]
+    XCTAssertTrue(result.waitForExistence(timeout: 10))
+    XCTAssertEqual(result.label, "42 мс")
+  }
+
   func testInvalidImportKeepsInputAndShowsErrorNextToSubmit() {
     let app = launch()
     tap(app.buttons["dashboard-import"])

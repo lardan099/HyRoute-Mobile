@@ -735,7 +735,8 @@ final class Client: ObservableObject, VPNCommandTarget {
   func loadLayoutPreview() -> Bool {
     let fixture = """
     {
-      "subscriptions": [{"id":"preview","title":"Серверы","canRefresh":true,"servers":[
+      "subscriptions": [{"id":"preview","title":"Серверы","canRefresh":true,"refreshedAt":1795400000,
+        "usedBytes":5927054868,"limitBytes":21474836480,"expiresAt":1893456000,"servers":[
         {"id":"auto","name":"Автовыбор","protocol":"vless","balance":true,"balanceStrategy":"leastPing"},
         {"id":"fi","name":"🇫🇮 Хельсинки · Северный узел | Hysteria 2","protocol":"hysteria2"},
         {"id":"nl","name":"🇳🇱 Амстердам · Резервный сервер | VLESS","protocol":"vless"},

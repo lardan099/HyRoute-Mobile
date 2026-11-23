@@ -160,6 +160,11 @@ struct Subscription: Decodable, Identifiable {
     guard let title, !title.isEmpty else { return "Импортированные серверы" }
     return title
   }
+
+  var hasMetadata: Bool {
+    refreshFailed == true || (refreshedAt ?? 0) > 0 ||
+      usedBytes != nil || limitBytes != nil || (expiresAt ?? 0) > 0
+  }
 }
 
 struct RoutingProfile: Decodable, Identifiable {

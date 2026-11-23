@@ -406,12 +406,14 @@ struct RouteCheckPage: View {
 
 struct SubscriptionDetails: View {
   let item: Subscription
+  var embedded = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       if let limit = item.limitBytes, limit > 0, let used = item.usedBytes {
         Text("\(bytes(used)) из \(bytes(limit))").accessibilityIdentifier("subscription-traffic")
-        ProgressView(value: min(Double(used) / Double(limit), 1))
+        ProgressView(value: min(max(Double(used) / Double(limit), 0), 1))
+          .accessibilityLabel("Трафик подписки")
       } else if let used = item.usedBytes {
         Text(item.limitBytes == 0 ? "Трафик \(bytes(used)) · без лимита" : "Трафик \(bytes(used))")
           .accessibilityIdentifier("subscription-traffic")
@@ -437,7 +439,9 @@ struct SubscriptionDetails: View {
     }
     .font(.subheadline)
     .foregroundStyle(HyStyle.muted)
-    .hyCard(padding: 12)
+    .padding(embedded ? 0 : 12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(embedded ? Color.clear : HyStyle.surface, in: RoundedRectangle(cornerRadius: 14))
   }
 
   private func date(_ epoch: Int64?) -> Date? {
