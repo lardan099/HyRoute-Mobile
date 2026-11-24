@@ -262,7 +262,6 @@ struct ProfileRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      HyIcon(symbol: profile.balance == true ? "bolt.fill" : "server.rack")
       VStack(alignment: .leading, spacing: 3) {
         Text(profile.displayTitle).font(.body.weight(.semibold))
           .foregroundStyle(HyStyle.ink).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
@@ -433,7 +432,7 @@ struct SubscriptionPage: View {
               ForEach(visible) { profile in
                 serverRow(profile, in: item)
                 if profile.id != visible.last?.id {
-                  Divider().overlay(HyStyle.stroke).padding(.leading, 52)
+                  Divider().overlay(HyStyle.stroke).padding(.horizontal, 12)
                 }
               }
             }
@@ -541,11 +540,9 @@ struct SubscriptionPage: View {
         }
         .font(.subheadline)
         .foregroundStyle(HyStyle.muted)
-        .padding(.leading, 48)
       } else if let row = rows.first {
         Text(row.label).font(.subheadline.monospacedDigit())
           .foregroundStyle(row.ms == nil ? HyStyle.muted : HyStyle.success)
-          .padding(.leading, 48)
           .accessibilityIdentifier("subscription-result-\(profile.id)")
       }
     }

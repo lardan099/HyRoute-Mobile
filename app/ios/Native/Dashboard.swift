@@ -14,10 +14,6 @@ struct Dashboard: View {
         connectionCard
         if !client.state.subscriptions.isEmpty {
           LazyVStack(alignment: .leading, spacing: 10) {
-            Text("Серверы").font(.title2.weight(.bold))
-              .foregroundStyle(HyStyle.ink)
-              .accessibilityAddTraits(.isHeader)
-              .padding(.bottom, 3)
             ForEach(client.state.subscriptions) { item in
               DashboardSubscription(client: client, measurements: measurements, item: item, selectedID: selectedID)
             }
@@ -240,11 +236,6 @@ private struct DashboardSubscription: View {
     let selected = selectedID == profile.id
     return Button { Task { _ = await client.select(profile.id) } } label: {
       HStack(spacing: 10) {
-        Image(systemName: profile.balance == true ? "bolt" : "server.rack")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(selected ? HyStyle.accent : HyStyle.muted)
-          .frame(width: 18)
-          .accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 3) {
           Text(profile.displayTitle).font(.subheadline.weight(.semibold))
             .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)

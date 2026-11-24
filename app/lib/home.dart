@@ -856,7 +856,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ),
       ),
       if (_subscriptions.isNotEmpty) ...[
-        const _SectionTitle('Серверы'),
+        const SizedBox(height: 10),
         for (final item in _subscriptions) _homeSubscription(context, item),
       ],
     ];
@@ -983,7 +983,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               ),
             for (final (index, server) in servers.indexed) ...[
               if (index > 0)
-                const Divider(height: 1, indent: 42, endIndent: 14),
+                const Divider(height: 1, indent: 16, endIndent: 16),
               _homeServer(server),
             ],
           ],
@@ -1005,10 +1005,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       visualDensity: VisualDensity.compact,
       selected: selected,
       selectedTileColor: colors.primary.withValues(alpha: 0.08),
-      leading: Icon(
-        server.balance ? Icons.bolt_rounded : Icons.dns_outlined,
-        size: 17,
-      ),
       title: Text(server.name),
       subtitle: Text(server.protocol),
       trailing: delay == null && !selected
@@ -1217,7 +1213,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     server.protocol.toLowerCase().contains(query),
               ))
                 ListTile(
-                  leading: _ProfileIcon(balance: server.balance),
                   title: Text(server.name),
                   subtitle: Text(
                     [
@@ -1432,31 +1427,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 }
 
-class _ProfileIcon extends StatelessWidget {
-  const _ProfileIcon({required this.balance});
-
-  final bool balance;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.primary.withValues(alpha: 0.11),
-        borderRadius: BorderRadius.circular(9),
-      ),
-      child: SizedBox.square(
-        dimension: 34,
-        child: Icon(
-          balance ? Icons.bolt_rounded : Icons.dns_outlined,
-          size: 19,
-          color: colors.primary,
-        ),
-      ),
-    );
-  }
-}
-
 class _ProfilePicker extends StatefulWidget {
   const _ProfilePicker({
     required this.servers,
@@ -1526,7 +1496,6 @@ class _ProfilePickerState extends State<_ProfilePicker> {
                         itemBuilder: (context, index) {
                           final server = matches[index];
                           return ListTile(
-                            leading: _ProfileIcon(balance: server.balance),
                             title: Text(server.name),
                             subtitle: Text(server.protocol),
                             selected: server.id == widget.selected,
@@ -1560,25 +1529,6 @@ class _PageTitle extends StatelessWidget {
         style: Theme.of(
           context,
         ).textTheme.headlineMedium!.copyWith(fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
-      child: Text(
-        text,
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium!.copyWith(fontWeight: FontWeight.w700),
       ),
     );
   }
