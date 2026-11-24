@@ -449,6 +449,8 @@ class ClientSettings {
     this.selected,
     this.rules = const [],
     this.defaultAction = RouteAction.tunnel,
+    this.defaultProfile,
+    this.defaultFallback = const [],
     this.via = const {},
     this.scope = AppScope.all,
     this.packages = const [],
@@ -463,6 +465,10 @@ class ClientSettings {
           .map((item) => RouteRule.fromJson(item as Map<String, dynamic>))
           .toList(growable: false),
       defaultAction: RouteAction.fromValue(routing['defaultAction']),
+      defaultProfile: routing['defaultProfile'] as String?,
+      defaultFallback:
+          (routing['defaultFallback'] as List<dynamic>? ?? const [])
+              .cast<String>(),
       via: (routing['viaProfiles'] as Map<String, dynamic>? ?? const {})
           .cast<String, String>(),
       scope: AppScope.values.firstWhere(
@@ -481,6 +487,8 @@ class ClientSettings {
   final String? selected;
   final List<RouteRule> rules;
   final RouteAction defaultAction;
+  final String? defaultProfile;
+  final List<String> defaultFallback;
   final Map<String, String> via;
   final AppScope scope;
   final List<String> packages;
@@ -490,6 +498,8 @@ class ClientSettings {
     'selected': ?selected,
     'routing': {
       'defaultAction': defaultAction.value,
+      'defaultProfile': ?defaultProfile,
+      if (defaultFallback.isNotEmpty) 'defaultFallback': defaultFallback,
       'rules': rules.map((rule) => rule.toJson()).toList(),
       'viaProfiles': via,
     },
@@ -597,18 +607,32 @@ class RouteRule {
     this.appName = '',
     this.server = '',
     this.protocol = '',
+    this.stored = const {},
   });
 
   factory RouteRule.fromJson(Map<String, dynamic> json) {
     final apps = json['apps'] as List<dynamic>? ?? const [];
+    final legacyApp = json['app'] as Map<String, dynamic>?;
+    final legacyDomain = json['domain'] as Map<String, dynamic>?;
+    final firstApp = apps.isEmpty
+        ? legacyApp
+        : apps.first as Map<String, dynamic>;
     return RouteRule(
       action: RouteAction.fromValue(json['action']),
-      destination: (json['domains'] as List<dynamic>? ?? const []).join('\n'),
-      port: json['ports'] as String? ?? '',
-      package: apps.isEmpty ? '' : apps.first['pattern'] as String,
-      appName: apps.isEmpty ? '' : json['name'] as String? ?? '',
+      destination: [
+        ...(json['domains'] as List<dynamic>? ?? const []),
+        if (legacyDomain?['pattern'] case final String value) value,
+      ].join('\n'),
+      port: switch (json['ports']) {
+        final String value => value,
+        final List<dynamic> values => values.join(','),
+        _ => '',
+      },
+      package: firstApp?['pattern'] as String? ?? '',
+      appName: firstApp == null ? '' : json['name'] as String? ?? '',
       server: json['profile'] as String? ?? '',
       protocol: json['protocol'] as String? ?? '',
+      stored: json,
     );
   }
 
@@ -619,6 +643,7 @@ class RouteRule {
   final String appName;
   final String server;
   final String protocol;
+  final Map<String, dynamic> stored;
 
   String get title => [
     if (destination.isNotEmpty)
@@ -628,23 +653,36 @@ class RouteRule {
     if (protocol.isNotEmpty) protocol.toUpperCase(),
   ].join(' · ');
 
-  Map<String, Object> toJson() => {
-    'action': action.value,
-    if (package.isNotEmpty && appName.isNotEmpty) 'name': appName,
-    if (destination.isNotEmpty)
-      'domains': destination
-          .split('\n')
-          .map((item) => item.trim())
-          .where((item) => item.isNotEmpty)
-          .toList(),
-    if (port.isNotEmpty) 'ports': port,
-    if (package.isNotEmpty)
-      'apps': [
-        {'kind': 'package', 'pattern': package},
-      ],
-    if (action == RouteAction.tunnel && server.isNotEmpty) 'profile': server,
-    if (protocol.isNotEmpty) 'protocol': protocol,
-  };
+  Map<String, Object> toJson() {
+    final apps = stored['apps'] as List<dynamic>? ?? const [];
+    final legacyApp = stored['app'] as Map<String, dynamic>?;
+    final originalApp = apps.isEmpty
+        ? legacyApp
+        : apps.first as Map<String, dynamic>;
+    final keepApps = package.isNotEmpty && package == originalApp?['pattern'];
+    return {
+      for (final key in const ['id', 'name', 'enabled', 'fallback', 'failMode'])
+        if (stored[key] case final Object value) key: value,
+      'action': action.value,
+      if (package.isNotEmpty && appName.isNotEmpty) 'name': appName,
+      if (destination.isNotEmpty)
+        'domains': destination
+            .split('\n')
+            .map((item) => item.trim())
+            .where((item) => item.isNotEmpty)
+            .toList(),
+      if (port.isNotEmpty) 'ports': port,
+      if (keepApps && legacyApp != null) 'app': legacyApp,
+      if (keepApps && apps.isNotEmpty)
+        'apps': apps
+      else if (!keepApps && package.isNotEmpty)
+        'apps': [
+          {'kind': 'package', 'pattern': package},
+        ],
+      if (action == RouteAction.tunnel && server.isNotEmpty) 'profile': server,
+      if (protocol.isNotEmpty) 'protocol': protocol,
+    };
+  }
 }
 
 enum AppScope {

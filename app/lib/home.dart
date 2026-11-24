@@ -23,6 +23,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var _rules = <RouteRule>[];
   var _via = <String, String>{};
   var _defaultAction = RouteAction.tunnel;
+  String? _defaultProfile;
+  var _defaultFallback = <String>[];
   var _scope = AppScope.all;
   var _packages = <String>[];
   var _routingProfiles = <RoutingProfile>[];
@@ -31,6 +33,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var _activeRoutingProfile = 'default';
   String? _selected;
   int _tab = 0;
+  var _routingSettings = false;
   bool _importing = false;
   bool _validating = false;
   bool _loading = true;
@@ -40,6 +43,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   bool _updatingAutomatically = false;
   int _stateRevision = 0;
   var _vpnStatus = 'off';
+  var _changingVpn = false;
+  var _pendingReconnect = false;
+  final _expandedSubscriptions = <String, bool>{};
+  final _sortLatency = <String>{};
+  final _latencies = <String, List<Map<String, dynamic>>>{};
+  String? _inlineProbe;
+  String? _probeError;
+  var _cancelInlineProbe = false;
 
   VPNControl? get _vpn {
     final core = widget.core;
@@ -58,12 +69,85 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   void _openProbe(String scope, String id) {
     final core = _diagnostics;
-    if (core == null) return;
+    if (core == null || _inlineProbe != null) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ProbePage(core: core, scope: scope, id: id),
       ),
     );
+  }
+
+  Future<void> _checkSubscription(Subscription subscription) async {
+    final core = _diagnostics;
+    if (core == null) return;
+    if (_inlineProbe == subscription.id) {
+      setState(() => _cancelInlineProbe = true);
+      return;
+    }
+    if (_inlineProbe != null) return;
+
+    final previous = {..._latencies};
+    setState(() {
+      _expandedSubscriptions[subscription.id] = true;
+      _inlineProbe = subscription.id;
+      _cancelInlineProbe = false;
+      _probeError = null;
+    });
+    try {
+      await pollProbe(
+        core,
+        'subscription',
+        subscription.id,
+        active: () => mounted && !_cancelInlineProbe,
+        report: (snapshot) {
+          final rows = <String, List<Map<String, dynamic>>>{};
+          for (final row in snapshot.results) {
+            if (row['profileId'] case final String id) {
+              rows.putIfAbsent(id, () => []).add(row);
+            }
+          }
+          setState(() => _latencies.addAll(rows));
+        },
+      );
+    } on Exception {
+      if (mounted && !_cancelInlineProbe) {
+        setState(() => _probeError = subscription.id);
+      }
+    } finally {
+      try {
+        await core.cancelProbe();
+      } on Exception {
+        // The activity can lose its channel while closing a batch.
+      }
+      if (mounted) {
+        setState(() {
+          for (final server in subscription.servers) {
+            final rows = _latencies[server.id] ?? const [];
+            if (rows.any(
+              (row) => ['pending', 'running'].contains(row['status']),
+            )) {
+              final saved = previous[server.id];
+              if (saved == null) {
+                _latencies.remove(server.id);
+              } else {
+                _latencies[server.id] = saved;
+              }
+            }
+          }
+          _inlineProbe = null;
+        });
+      }
+    }
+  }
+
+  int? _latency(String id) {
+    int? best;
+    for (final row in _latencies[id] ?? const []) {
+      if (row['ms'] case final int ms when row['status'] == 'ok') {
+        if (best == null || ms < best) best = ms;
+      }
+    }
+    return best;
   }
 
   @override
@@ -134,7 +218,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (vpn == null) return;
     try {
       final status = await vpn.vpnStatus();
-      if (mounted && status != _vpnStatus) setState(() => _vpnStatus = status);
+      if (mounted && status != _vpnStatus) {
+        setState(() {
+          _vpnStatus = status;
+          if (status == 'off' && !_changingVpn) _pendingReconnect = false;
+        });
+      }
     } on PlatformException {
       if (mounted) setState(() => _vpnStatus = 'error');
     } on MissingPluginException {
@@ -144,16 +233,46 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   Future<void> _toggleVPN() async {
     final vpn = _vpn;
-    if (vpn == null) return;
+    if (vpn == null || _changingVpn) return;
+    setState(() => _changingVpn = true);
     try {
       if (_vpnStatus == 'on' || _vpnStatus == 'starting') {
         await vpn.stopVpn();
       } else {
         await vpn.startVpn();
+        if (mounted) setState(() => _pendingReconnect = false);
       }
       await _readVPNStatus();
     } on PlatformException {
       if (mounted) setState(() => _vpnStatus = 'error');
+    } finally {
+      if (mounted) setState(() => _changingVpn = false);
+    }
+  }
+
+  Future<void> _reconnect() async {
+    final vpn = _vpn;
+    if (vpn == null || _changingVpn) return;
+    setState(() => _changingVpn = true);
+    try {
+      await vpn.stopVpn();
+      for (var attempt = 0; attempt < 30; attempt++) {
+        if (!mounted) return;
+        if (await vpn.vpnStatus() == 'off') {
+          await vpn.startVpn();
+          if (mounted) setState(() => _pendingReconnect = false);
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
+      if (mounted) _notify('Android ещё останавливает VPN.');
+    } on PlatformException {
+      if (mounted) _notify('Не удалось переподключиться. Откройте журнал VPN.');
+    } finally {
+      if (mounted) {
+        await _readVPNStatus();
+        if (mounted) setState(() => _changingVpn = false);
+      }
     }
   }
 
@@ -183,6 +302,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     _rules = settings.rules;
     _via = settings.via;
     _defaultAction = settings.defaultAction;
+    _defaultProfile = settings.defaultProfile;
+    _defaultFallback = settings.defaultFallback;
     _scope = settings.scope;
     _packages = settings.packages;
     _splitDns = settings.splitDns;
@@ -261,12 +382,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   Future<void> _import() async {
     if (_importing || _validating) return;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => SubscriptionEditor(
-        onImport: (input) =>
-            _updateSubscriptions(() => widget.core.importSubscription(input)),
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => SubscriptionEditor(
+          onImport: (input) =>
+              _updateSubscriptions(() => widget.core.importSubscription(input)),
+        ),
       ),
     );
   }
@@ -334,6 +456,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final next = ClientSettings(
       rules: rules ?? _rules,
       defaultAction: defaultAction ?? _defaultAction,
+      defaultProfile: _defaultProfile,
+      defaultFallback: _defaultFallback,
       via: via ?? _via,
       selected: selected ?? _selected,
       scope: scope ?? _scope,
@@ -355,9 +479,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             ),
           ),
         );
-        if (_vpnStatus == 'on') {
-          _notify('Настройки сохранены. Они применятся после переподключения.');
-        }
+        if (_vpnStatus == 'on') setState(() => _pendingReconnect = true);
       }
       return null;
     } on PlatformException catch (error) {
@@ -489,7 +611,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Future<void> _editChain() async {
     final edit = await showDialog<(String, String)>(
       context: context,
-      builder: (_) => ChainEditor(servers: _chainServers, via: _via),
+      builder: (_) =>
+          ChainEditor(servers: _chainServers, entries: _servers, via: _via),
     );
     if (!mounted || edit == null) return;
     final (exit, entry) = edit;
@@ -498,9 +621,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       next.remove(exit);
     } else {
       next[exit] = entry;
+      final seen = {exit};
       String? id = entry;
       while (id != null) {
-        if (id == exit) {
+        if (!seen.add(id)) {
           _notify('Профили в цепочке образуют цикл.');
           return;
         }
@@ -538,13 +662,21 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'HyRoute',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
-        leadingWidth: 56,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 16, top: 6, bottom: 6),
-          child: Center(
-            child: Image.asset('assets/hyroute.png', width: 31, height: 31),
-          ),
-        ),
+        actions: [
+          if (_tab == 0 &&
+              (_diagnostics != null || widget.core is VPNSystemSettings))
+            IconButton(
+              tooltip: 'Настройки VPN',
+              onPressed: _openVpnControls,
+              icon: const Icon(Icons.settings_outlined),
+            ),
+          if (_tab == 0 && !_loading && !_storageFailed)
+            IconButton(
+              tooltip: 'Добавить подписку',
+              onPressed: _importing || _validating ? null : _import,
+              icon: const Icon(Icons.add_rounded),
+            ),
+        ],
       ),
       body: SafeArea(
         top: false,
@@ -553,52 +685,84 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 620),
-            child: ListView(
-              key: PageStorageKey(_tab),
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
-              children: switch ((_loading, _storageFailed, _tab)) {
-                (true, _, _) => const [
-                  Center(child: CircularProgressIndicator()),
-                ],
-                (_, true, _) => [
-                  const Text('Не удалось открыть хранилище HyRoute.'),
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _loading = true;
-                        _storageFailed = false;
-                      });
-                      _loadState();
-                    },
-                    child: const Text('Повторить'),
+            child: Column(
+              children: [
+                if (!_loading && !_storageFailed && _tab == 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(value: false, label: Text('Список')),
+                          ButtonSegment(value: true, label: Text('Настройки')),
+                        ],
+                        selected: {_routingSettings},
+                        onSelectionChanged: (values) =>
+                            setState(() => _routingSettings = values.single),
+                      ),
+                    ),
                   ),
-                ],
-                (_, _, 1) => _subscriptionPage(context),
-                (_, _, 2) => _rulesPage(context),
-                _ => _connectionPage(context),
-              },
+                Expanded(
+                  child: ListView(
+                    key: PageStorageKey((_tab, _tab == 2 && _routingSettings)),
+                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+                    children: switch ((_loading, _storageFailed, _tab)) {
+                      (true, _, _) => const [
+                        Center(child: CircularProgressIndicator()),
+                      ],
+                      (_, true, _) => [
+                        const Text('Не удалось открыть хранилище HyRoute.'),
+                        TextButton(
+                          onPressed: () {
+                            setState(() {
+                              _loading = true;
+                              _storageFailed = false;
+                            });
+                            _loadState();
+                          },
+                          child: const Text('Повторить'),
+                        ),
+                      ],
+                      (_, _, 1) => _subscriptionPage(context),
+                      (_, _, 2) =>
+                        _routingSettings ? _ruleSettings() : _rulesPage(),
+                      _ => _connectionPage(context),
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (tab) => setState(() => _tab = tab),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: 'Главная',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.layers_outlined),
-            selectedIcon: Icon(Icons.layers_rounded),
-            label: 'Подписки',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.alt_route_outlined),
-            selectedIcon: Icon(Icons.alt_route_rounded),
-            label: 'Правила',
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_vpn != null &&
+              ((_tab == 0 && _selected != null) ||
+                  (_pendingReconnect && _vpnStatus == 'on')))
+            _connectionActions(),
+          NavigationBar(
+            selectedIndex: _tab,
+            onDestinationSelected: (tab) => setState(() => _tab = tab),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home_rounded),
+                label: 'Главная',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.layers_outlined),
+                selectedIcon: Icon(Icons.layers_rounded),
+                label: 'Подписки',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.alt_route_outlined),
+                selectedIcon: Icon(Icons.alt_route_rounded),
+                label: 'Правила',
+              ),
+            ],
           ),
         ],
       ),
@@ -606,70 +770,282 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   List<Widget> _connectionPage(BuildContext context) {
-    final servers = _servers;
-    final selected = servers
+    final selected = _servers
         .where((server) => server.id == _selected)
         .firstOrNull;
+    final theme = Theme.of(context);
     return [
-      _ConnectionCard(
-        status: _vpnStatus,
-        available: _vpn != null,
-        hasProfile: selected != null,
-        onToggle: _toggleVPN,
-      ),
-      if (_diagnostics case final DiagnosticsControl core)
-        ListTile(
-          leading: const Icon(Icons.receipt_long_outlined),
-          title: const Text('Журнал VPN'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => VPNJournalPage(core: core)),
-          ),
-        ),
-      if (_vpn != null && widget.core is VPNSystemSettings)
-        ListTile(
-          leading: const Icon(Icons.shield_outlined),
-          title: const Text('Защита VPN'),
-          subtitle: const Text('Постоянный VPN и блокировка соединений'),
-          trailing: const Icon(Icons.open_in_new),
-          onTap: () async {
-            try {
-              await (widget.core as VPNSystemSettings).openVpnSettings();
-            } on PlatformException {
-              if (mounted) _notify('Откройте VPN в настройках Android.');
-            }
-          },
-        ),
-      const _SectionTitle('Основной профиль'),
       Card(
-        child: selected == null
-            ? ListTile(
-                leading: const Icon(Icons.dns_outlined),
-                title: const Text('Сервер не выбран'),
-                subtitle: const Text('Добавьте подписку или ссылку сервера'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: _import,
+        margin: EdgeInsets.zero,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.circle,
+                    size: 9,
+                    color: _vpnStatus == 'on'
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(_vpnTitle, style: theme.textTheme.labelLarge),
+                  ),
+                ],
+              ),
+            ),
+            if (selected == null)
+              ListTile(
+                title: const Text('Добавить подписку'),
+                subtitle: const Text('Ссылка или конфиг сервера'),
+                trailing: const Icon(Icons.add_rounded),
+                onTap: _importing || _validating ? null : _import,
               )
-            : ListTile(
+            else
+              ListTile(
                 key: const ValueKey('primary-profile'),
-                leading: _ProfileIcon(balance: selected.balance),
-                title: Text(selected.name),
+                title: Text(selected.name, style: theme.textTheme.titleLarge),
                 subtitle: Text(selected.protocol),
-                trailing: const Icon(Icons.unfold_more_rounded),
+                trailing: const Icon(
+                  Icons.swap_vert,
+                  semanticLabel: 'Сменить сервер',
+                ),
                 onTap: _importing || _validating ? null : _chooseProfile,
               ),
-      ),
-      const _SectionTitle('Маршрутизация'),
-      Card(
-        child: ListTile(
-          leading: const Icon(Icons.alt_route_rounded),
-          title: const Text('Всё остальное'),
-          subtitle: Text(_defaultAction.label),
-          trailing: const Icon(Icons.chevron_right_rounded),
-          onTap: () => setState(() => _tab = 2),
+          ],
         ),
       ),
+      if (_subscriptions.isNotEmpty) ...[
+        const _SectionTitle('Подписки и серверы'),
+        for (final item in _subscriptions) _homeSubscription(context, item),
+      ],
     ];
+  }
+
+  String get _vpnTitle => switch (_vpnStatus) {
+    'on' => 'VPN включён',
+    'permission' => 'Ожидание разрешения Android',
+    'starting' => 'Подключение VPN',
+    'stopping' => 'Отключение VPN',
+    'error' => 'Не удалось подключить VPN',
+    _ => 'VPN выключен',
+  };
+
+  Widget _homeSubscription(BuildContext context, Subscription item) {
+    final servers = item.servers.where((server) => !server.missing).toList();
+    final expanded =
+        _expandedSubscriptions[item.id] ??
+        servers.any((server) => server.id == _selected);
+    final probing = _inlineProbe == item.id;
+    final canMeasure = _diagnostics != null && servers.isNotEmpty;
+    final hasLatency = servers.any((server) => _latency(server.id) != null);
+    final sort = _sortLatency.contains(item.id) && hasLatency;
+    if (sort) {
+      final position = {
+        for (final (index, server) in servers.indexed) server.id: index,
+      };
+      servers.sort((first, second) {
+        final a = _latency(first.id);
+        final b = _latency(second.id);
+        if (a == b) return position[first.id]!.compareTo(position[second.id]!);
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a.compareTo(b);
+      });
+    }
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: ListTile(
+                  key: ValueKey('home-subscription-${item.id}'),
+                  contentPadding: const EdgeInsets.only(left: 12),
+                  leading: Icon(
+                    expanded ? Icons.expand_more : Icons.chevron_right,
+                    size: 20,
+                  ),
+                  title: Text(
+                    item.title.isEmpty ? 'Импортированные серверы' : item.title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text('Доступно ${servers.length}'),
+                  onTap: () => setState(
+                    () => _expandedSubscriptions[item.id] = !expanded,
+                  ),
+                ),
+              ),
+              if (item.canRefresh)
+                IconButton(
+                  tooltip: 'Обновить подписку',
+                  icon: const Icon(Icons.refresh_rounded),
+                  onPressed: _importing || _validating || probing
+                      ? null
+                      : () => _refresh(item.id),
+                ),
+              if (canMeasure)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: IconButton(
+                    key: ValueKey('home-probe-${item.id}'),
+                    tooltip: probing
+                        ? 'Остановить замер'
+                        : 'Проверить всю подписку',
+                    icon: Icon(
+                      probing
+                          ? Icons.stop_circle_outlined
+                          : Icons.speed_rounded,
+                    ),
+                    onPressed: probing
+                        ? (_cancelInlineProbe
+                              ? null
+                              : () => _checkSubscription(item))
+                        : _inlineProbe != null || _importing || _validating
+                        ? null
+                        : () => _checkSubscription(item),
+                  ),
+                ),
+            ],
+          ),
+          if (expanded) ...[
+            const Divider(height: 1),
+            if (probing) const LinearProgressIndicator(),
+            if (_probeError == item.id)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+                child: Text(
+                  'Не удалось измерить задержку',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            SubscriptionDetails(subscription: item),
+            if (hasLatency)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilterChip(
+                    selected: sort,
+                    label: const Text('Сначала быстрые'),
+                    onSelected: probing
+                        ? null
+                        : (selected) => setState(() {
+                            if (selected) {
+                              _sortLatency.add(item.id);
+                            } else {
+                              _sortLatency.remove(item.id);
+                            }
+                          }),
+                  ),
+                ),
+              ),
+            for (final server in servers) _homeServer(server),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _homeServer(Server server) {
+    final ms = _latency(server.id);
+    final row = _latencies[server.id]?.firstOrNull;
+    final delay = ms != null
+        ? '$ms мс'
+        : (row == null ? null : probeRowLabel(row));
+    final selected = server.id == _selected;
+    return ListTile(
+      key: ValueKey('home-server-${server.id}'),
+      visualDensity: VisualDensity.compact,
+      title: Text(server.name),
+      subtitle: Text([server.protocol, ?delay].join(' · ')),
+      trailing: selected
+          ? const Icon(Icons.check_circle_outline, semanticLabel: 'Выбран')
+          : null,
+      onTap: _importing || _validating
+          ? null
+          : () => _saveSettings(selected: server.id),
+    );
+  }
+
+  void _openVpnControls() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => Scaffold(
+          appBar: AppBar(title: const Text('Настройки VPN')),
+          body: ListView(
+            children: [
+              if (_diagnostics case final DiagnosticsControl core)
+                ListTile(
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: const Text('Журнал VPN'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => VPNJournalPage(core: core),
+                    ),
+                  ),
+                ),
+              if (widget.core case final VPNSystemSettings settings)
+                ListTile(
+                  leading: const Icon(Icons.shield_outlined),
+                  title: const Text('Защита VPN'),
+                  subtitle: const Text(
+                    'Постоянный VPN и блокировка соединений',
+                  ),
+                  trailing: const Icon(Icons.open_in_new),
+                  onTap: () async {
+                    try {
+                      await settings.openVpnSettings();
+                    } on PlatformException {
+                      if (mounted) {
+                        _notify('Откройте VPN в настройках Android.');
+                      }
+                    }
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _connectionActions() {
+    final canStop = _vpnStatus == 'on' || _vpnStatus == 'starting';
+    final canStart = _selected != null && ['off', 'error'].contains(_vpnStatus);
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_pendingReconnect && _vpnStatus == 'on')
+              TextButton.icon(
+                onPressed: _changingVpn ? null : _reconnect,
+                icon: const Icon(Icons.sync_rounded),
+                label: const Text('Переподключить и применить настройки'),
+              ),
+            if (_tab == 0)
+              FilledButton.icon(
+                key: const ValueKey('sticky-connect'),
+                onPressed: !_changingVpn && (canStart || canStop)
+                    ? _toggleVPN
+                    : null,
+                icon: const Icon(Icons.power_settings_new),
+                label: Text(canStop ? 'Отключить VPN' : 'Подключить VPN'),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   List<Widget> _subscriptionPage(BuildContext context) {
@@ -721,7 +1097,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         ? 'Проверить все группы'
                         : 'Проверить всю подписку',
                   ),
-                  onTap: () => _openProbe('subscription', subscription.id),
+                  onTap: _inlineProbe != null
+                      ? null
+                      : () => _openProbe('subscription', subscription.id),
                 ),
               if (subscription.canRefresh)
                 ListTile(
@@ -753,7 +1131,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                           tooltip: server.balance
                               ? 'Проверить узлы группы'
                               : 'Проверить задержку',
-                          onPressed: () => _openProbe('profile', server.id),
+                          onPressed: _inlineProbe != null
+                              ? null
+                              : () => _openProbe('profile', server.id),
                         ),
                     ],
                   ),
@@ -768,7 +1148,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     ];
   }
 
-  List<Widget> _rulesPage(BuildContext context) {
+  List<Widget> _rulesPage() {
     return [
       const _PageTitle('Маршрутизация'),
       if (_routing != null) ...[
@@ -804,26 +1184,25 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           child: Text('Срабатывает первое подходящее правило сверху.'),
         ),
       for (var index = 0; index < _rules.length; index++) _ruleTile(index),
-      const _SectionTitle('Другие настройки'),
+    ];
+  }
+
+  List<Widget> _ruleSettings() {
+    return [
       Card(
         child: ListTile(
           leading: const Icon(Icons.alt_route_rounded),
-          title: const Text('Всё остальное'),
-          trailing: DropdownButtonHideUnderline(
-            child: DropdownButton<RouteAction>(
-              value: _defaultAction,
-              items: RouteAction.values
-                  .map(
-                    (action) => DropdownMenuItem(
-                      value: action,
-                      child: Text(action.label),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _validating
-                  ? null
-                  : (value) => _saveSettings(defaultAction: value),
-            ),
+          title: const Text('Трафик без правила'),
+          subtitle: Text(_defaultAction.label),
+          trailing: PopupMenuButton<RouteAction>(
+            tooltip: 'Выбрать маршрут по умолчанию',
+            initialValue: _defaultAction,
+            enabled: !_validating && !_importing,
+            onSelected: (value) => _saveSettings(defaultAction: value),
+            itemBuilder: (_) => [
+              for (final action in RouteAction.values)
+                PopupMenuItem(value: action, child: Text(action.label)),
+            ],
           ),
         ),
       ),
@@ -877,7 +1256,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           title: const Text('Профиль через профиль'),
           subtitle: Text(
             _via.isEmpty
-                ? (_chainServers.length < 2
+                ? (_servers.length < 2
                       ? 'Нужно два VPN-профиля'
                       : 'Выберите входной и выходной профили')
                 : _via.entries
@@ -888,7 +1267,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       .join('\n'),
           ),
           trailing: const Icon(Icons.chevron_right_rounded),
-          onTap: _chainServers.length < 2 || _validating ? null : _editChain,
+          onTap:
+              _chainServers.isEmpty ||
+                  (_servers.length < 2 && _via.isEmpty) ||
+                  _validating
+              ? null
+              : _editChain,
         ),
       ),
     ];
@@ -919,95 +1303,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             if (index < _rules.length - 1)
               const PopupMenuItem(value: 'down', child: Text('Опустить ниже')),
             const PopupMenuItem(value: 'delete', child: Text('Удалить')),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConnectionCard extends StatelessWidget {
-  const _ConnectionCard({
-    required this.status,
-    required this.available,
-    required this.hasProfile,
-    required this.onToggle,
-  });
-
-  final String status;
-  final bool available;
-  final bool hasProfile;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final title = switch (status) {
-      'on' => 'VPN включён',
-      'starting' || 'permission' => 'Подключение VPN',
-      'stopping' => 'Отключение VPN',
-      'error' => 'Не удалось подключить VPN',
-      _ => 'VPN выключен',
-    };
-    final details = !available
-        ? 'Подключение доступно в мобильном приложении.'
-        : switch (status) {
-            'permission' => 'Разрешите подключение в системном окне.',
-            'error' => 'Проверьте профиль, правила и доступ к интернету.',
-            _ => hasProfile ? null : 'Выберите профиль, чтобы подключиться.',
-          };
-    final canStop = status == 'on' || status == 'starting';
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xff122522),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xff203d34), Color(0xff111f20)],
-        ),
-        borderRadius: BorderRadius.circular(23),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                color: Color(0xff355049),
-                borderRadius: BorderRadius.all(Radius.circular(14)),
-              ),
-              child: SizedBox.square(
-                dimension: 48,
-                child: Icon(
-                  Icons.power_settings_new_rounded,
-                  size: 23,
-                  color: Color(0xff91efcb),
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.headlineSmall!.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            if (details != null) ...[
-              const SizedBox(height: 6),
-              Text(details, style: const TextStyle(color: Color(0xffc4d7ce))),
-            ],
-            if (available) ...[
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed:
-                    canStop ||
-                        hasProfile && (status == 'off' || status == 'error')
-                    ? onToggle
-                    : null,
-                child: Text(canStop ? 'Отключить' : 'Подключить'),
-              ),
-            ],
           ],
         ),
       ),

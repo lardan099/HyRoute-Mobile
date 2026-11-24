@@ -54,59 +54,90 @@ class _SubscriptionEditorState extends State<SubscriptionEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Добавить подписку'),
-      scrollable: true,
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: _input,
-            enabled: !_busy,
-            autocorrect: false,
-            enableSuggestions: false,
-            minLines: 3,
-            maxLines: 6,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              labelText: 'Ссылка или конфиг',
-              hintText: 'https://…',
-              alignLabelWithHint: true,
-            ),
+    return PopScope(
+      canPop: !_busy,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Добавить подписку'),
+          automaticallyImplyLeading: !_busy,
+        ),
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    TextField(
+                      controller: _input,
+                      enabled: !_busy,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      minLines: 4,
+                      maxLines: 9,
+                      onChanged: (_) => setState(() => _error = null),
+                      decoration: const InputDecoration(
+                        labelText: 'Ссылка или конфиг',
+                        hintText: 'https://…',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.content_paste_rounded),
+                        label: const Text('Вставить из буфера'),
+                        onPressed: _busy
+                            ? null
+                            : () async {
+                                final text = (await Clipboard.getData(
+                                  Clipboard.kTextPlain,
+                                ))?.text;
+                                if (!mounted) return;
+                                setState(() {
+                                  if (text == null || text.trim().isEmpty) {
+                                    _error = 'Буфер обмена пуст.';
+                                  } else {
+                                    _input.text = text;
+                                    _error = null;
+                                  }
+                                });
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    if (_busy) const LinearProgressIndicator(),
+                    FilledButton(
+                      onPressed: _busy || _input.text.trim().isEmpty
+                          ? null
+                          : _submit,
+                      child: Text(_busy ? 'Импортируем…' : 'Импортировать'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          TextButton.icon(
-            icon: const Icon(Icons.content_paste_rounded),
-            label: const Text('Вставить из буфера'),
-            onPressed: _busy
-                ? null
-                : () async {
-                    final text = (await Clipboard.getData(
-                      Clipboard.kTextPlain,
-                    ))?.text;
-                    if (mounted && text != null) {
-                      setState(() => _input.text = text);
-                    }
-                  },
-          ),
-          if (_busy) const LinearProgressIndicator(),
-          if (_error != null)
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-        ],
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context),
-          child: const Text('Отмена'),
-        ),
-        FilledButton(
-          onPressed: _busy || _input.text.trim().isEmpty ? null : _submit,
-          child: const Text('Импортировать'),
-        ),
-      ],
     );
   }
 }
@@ -434,6 +465,7 @@ class _RuleEditorState extends State<RuleEditor> {
         appName: _appName ?? '',
         server: _action == RouteAction.tunnel ? _server : '',
         protocol: _protocol,
+        stored: widget.initial?.stored ?? const {},
       ),
     );
     if (!mounted) return;
@@ -724,9 +756,15 @@ List<DropdownMenuItem<String>> serverItems(
 }
 
 class ChainEditor extends StatefulWidget {
-  const ChainEditor({super.key, required this.servers, required this.via});
+  const ChainEditor({
+    super.key,
+    required this.servers,
+    required this.entries,
+    required this.via,
+  });
 
   final List<Server> servers;
+  final List<Server> entries;
   final Map<String, String> via;
 
   @override
@@ -734,11 +772,16 @@ class ChainEditor extends StatefulWidget {
 }
 
 class _ChainEditorState extends State<ChainEditor> {
-  late String _exit = widget.servers.first.id;
-  late String _entry = widget.via[_exit] ?? '';
+  String? _exit;
+  var _entry = '';
 
   @override
   Widget build(BuildContext context) {
+    final entries = widget.entries
+        .where((server) => server.id != _exit)
+        .toList();
+    final entryExists = entries.any((server) => server.id == _entry);
+    final saved = widget.via[_exit];
     return AlertDialog(
       scrollable: true,
       title: const Text('Цепочка профилей'),
@@ -746,8 +789,10 @@ class _ChainEditorState extends State<ChainEditor> {
         mainAxisSize: MainAxisSize.min,
         children: [
           DropdownButtonFormField<String>(
+            key: const ValueKey('chain-exit'),
             isExpanded: true,
             initialValue: _exit,
+            hint: const Text('Выбрать выходной профиль'),
             decoration: const InputDecoration(labelText: 'Выходной профиль'),
             items: serverItems(widget.servers),
             onChanged: (value) => setState(() {
@@ -759,14 +804,21 @@ class _ChainEditorState extends State<ChainEditor> {
           DropdownButtonFormField<String>(
             key: ValueKey(_exit),
             isExpanded: true,
-            initialValue: _entry,
+            initialValue: entryExists ? _entry : '',
             decoration: const InputDecoration(labelText: 'Подключать через'),
             items: serverItems(
-              widget.servers.where((server) => server.id != _exit).toList(),
+              entries,
               emptyLabel: 'Без промежуточного профиля',
             ),
-            onChanged: (value) => setState(() => _entry = value!),
+            onChanged: _exit == null
+                ? null
+                : (value) => setState(() => _entry = value!),
           ),
+          if (!entryExists && _entry.isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('Первый профиль недоступен. Выберите замену.'),
+            ),
         ],
       ),
       actions: [
@@ -774,8 +826,15 @@ class _ChainEditorState extends State<ChainEditor> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Отмена'),
         ),
+        if (saved != null)
+          TextButton(
+            onPressed: () => Navigator.pop(context, (_exit!, '')),
+            child: const Text('Удалить связь'),
+          ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, (_exit, _entry)),
+          onPressed: _exit == null || !entryExists || saved == _entry
+              ? null
+              : () => Navigator.pop(context, (_exit!, _entry)),
           child: const Text('Сохранить'),
         ),
       ],

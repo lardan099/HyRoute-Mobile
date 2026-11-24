@@ -115,6 +115,33 @@ class _DiagnosticsTestCore extends _TestCore
   Future<void> cancelProbe() async {}
 }
 
+class _InlineDiagnosticsTestCore extends _DiagnosticsTestCore {
+  var status = 'off';
+  var starts = 0;
+  var stops = 0;
+
+  @override
+  Future<String> vpnStatus() async => status;
+
+  @override
+  Future<void> startVpn() async {
+    starts++;
+    status = 'on';
+  }
+
+  @override
+  Future<void> stopVpn() async {
+    stops++;
+    status = 'off';
+  }
+
+  @override
+  Future<ProbeSnapshot> probeStatus() async => const ProbeSnapshot(true, [
+    {'profileId': 'one', 'name': 'Первый', 'status': 'ok', 'ms': 88},
+    {'profileId': 'two', 'name': 'Второй', 'status': 'ok', 'ms': 24},
+  ]);
+}
+
 class _MaintenanceTestCore extends _DiagnosticsTestCore
     implements MaintenanceControl {
   int refreshes = 0;
@@ -213,6 +240,43 @@ Future<void> _submitTestSubscription(WidgetTester tester) async {
 }
 
 void main() {
+  test('keeps existing routing names, fallbacks and app conditions', () {
+    final settings = ClientSettings.fromJson({
+      'selected': 'server',
+      'routing': {
+        'defaultAction': 'tunnel',
+        'defaultProfile': 'fallback',
+        'defaultFallback': ['second'],
+        'rules': [
+          {
+            'id': 'video',
+            'name': 'Видео',
+            'enabled': false,
+            'action': 'tunnel',
+            'domain': {'pattern': '.example.org'},
+            'ports': [443, '8000-8100'],
+            'fallback': ['fallback'],
+            'apps': [
+              {'pattern': 'com.example.one', 'kind': 'package'},
+              {'pattern': 'com.example.two', 'kind': 'package'},
+            ],
+          },
+        ],
+      },
+    });
+    final routing = settings.toJson()['routing'] as Map;
+    final rule = (routing['rules'] as List).single as Map;
+    expect(routing['defaultProfile'], 'fallback');
+    expect(routing['defaultFallback'], ['second']);
+    expect(rule['id'], 'video');
+    expect(rule['name'], 'Видео');
+    expect(rule['enabled'], false);
+    expect(rule['domains'], ['.example.org']);
+    expect(rule['ports'], '443,8000-8100');
+    expect(rule['fallback'], ['fallback']);
+    expect(rule['apps'], hasLength(2));
+  });
+
   testWidgets('saves a server group without a reserve', (tester) async {
     ServerGroup? saved;
     await tester.pumpWidget(
@@ -291,6 +355,7 @@ void main() {
     await _openApp(tester, core: core);
     await tester.tap(find.widgetWithText(NavigationDestination, 'Правила'));
     await tester.pumpAndSettle();
+    await _tap(tester, 'Настройки');
     final dns = find.text('Раздельный DNS');
     await tester.scrollUntilVisible(dns, 180);
     await tester.tap(dns);
@@ -374,6 +439,7 @@ void main() {
     final core = _MaintenanceTestCore();
     await _openApp(tester, core: core);
     await _tap(tester, 'Правила');
+    await _tap(tester, 'Настройки');
     await _tap(tester, 'Базы правил');
     await _tap(tester, 'geosite.dat ▾');
     await _tap(tester, 'Указать ссылку');
@@ -406,8 +472,12 @@ void main() {
   ) async {
     final core = _DiagnosticsTestCore();
     await _openApp(tester, core: core);
+    await tester.tap(find.byTooltip('Настройки VPN'));
+    await tester.pumpAndSettle();
     await _tap(tester, 'Журнал VPN');
     expect(find.text('00:00:01  VPN отключён'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.pageBack();
     await tester.pumpAndSettle();
 
@@ -453,7 +523,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'фин');
     await tester.pumpAndSettle();
-    await _tap(tester, 'Финляндия');
+    await tester.tap(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text('Финляндия'),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(
       find.descendant(of: selector, matching: find.text('Финляндия')),
       findsOneWidget,
@@ -573,7 +649,11 @@ void main() {
     final core = await _openApp(tester);
     await _importTestSubscription(tester);
     await _tap(tester, 'Правила');
+    await _tap(tester, 'Настройки');
     await _tap(tester, 'Профиль через профиль');
+    await tester.tap(find.byKey(const ValueKey('chain-exit')));
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Нидерланды');
     await _tap(tester, 'Без промежуточного профиля');
     await _tap(tester, 'Финляндия');
     await _tap(tester, 'Сохранить');
@@ -611,7 +691,92 @@ void main() {
     await _tap(tester, 'Подписки');
     expect(find.text('Тестовая подписка'), findsOneWidget);
     await _tap(tester, 'Правила');
+    await _tap(tester, 'Настройки');
     expect(find.text('Только выбранные'), findsOneWidget);
     expect(find.text('Нидерланды через Финляндия'), findsOneWidget);
+  });
+
+  testWidgets(
+    'measures and sorts servers on home with a pinned connect button',
+    (tester) async {
+      final core = _InlineDiagnosticsTestCore()
+        ..state = ClientState(
+          subscriptions: [
+            Subscription(
+              id: 'latency-list',
+              title: 'Рабочие серверы',
+              servers: [
+                const Server(id: 'one', name: 'Первый', protocol: 'VLESS'),
+                const Server(id: 'two', name: 'Второй', protocol: 'Hysteria 2'),
+                for (var index = 0; index < 12; index++)
+                  Server(
+                    id: 'extra-$index',
+                    name: 'Ещё $index',
+                    protocol: 'VLESS',
+                  ),
+              ],
+            ),
+          ],
+        );
+      await _openApp(tester, core: core);
+      tester.view.physicalSize = const Size(320, 650);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('home-probe-latency-list')));
+      await tester.pumpAndSettle();
+      expect(core.probes, [('subscription', 'latency-list')]);
+      expect(find.text('Задержка серверов'), findsNothing);
+      expect(find.textContaining('24 мс'), findsOneWidget);
+      final first = find.byKey(const ValueKey('home-server-one'));
+      final second = find.byKey(const ValueKey('home-server-two'));
+      expect(
+        tester.getTopLeft(first).dy,
+        lessThan(tester.getTopLeft(second).dy),
+      );
+      await _tap(tester, 'Сначала быстрые');
+      expect(
+        tester.getTopLeft(second).dy,
+        lessThan(tester.getTopLeft(first).dy),
+      );
+
+      final button = find.byKey(const ValueKey('sticky-connect'));
+      final buttonPosition = tester.getTopLeft(button);
+      await tester.drag(find.byType(ListView).first, const Offset(0, -350));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(button), buttonPosition);
+      expect(button.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('switches server and applies it with one reconnect action', (
+    tester,
+  ) async {
+    final core = _InlineDiagnosticsTestCore()
+      ..state = const ClientState(
+        subscriptions: [
+          Subscription(
+            id: 'work',
+            title: 'Серверы',
+            servers: [
+              Server(id: 'one', name: 'Первый', protocol: 'VLESS'),
+              Server(id: 'two', name: 'Второй', protocol: 'Hysteria 2'),
+            ],
+          ),
+        ],
+      );
+    await _openApp(tester, core: core);
+    await _tap(tester, 'Подключить VPN');
+    await tester.tap(find.byKey(const ValueKey('home-server-two')));
+    await tester.pumpAndSettle();
+    expect(core.state.settings.selected, 'two');
+    await _tap(tester, 'Переподключить и применить настройки');
+    expect(core.stops, 1);
+    expect(core.starts, 2);
+    expect(find.text('Переподключить и применить настройки'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

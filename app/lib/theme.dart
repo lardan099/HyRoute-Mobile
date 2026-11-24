@@ -6,22 +6,23 @@ ThemeData appTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(seedColor: accent, brightness: brightness)
       .copyWith(
-        primary: dark ? const Color(0xff84e4c4) : const Color(0xff14644f),
-        surface: dark ? const Color(0xff1b2422) : Colors.white,
+        primary: dark ? const Color(0xffa2edc9) : const Color(0xff14644f),
+        onPrimary: dark ? const Color(0xff102a20) : Colors.white,
+        surface: dark ? const Color(0xff1d2024) : Colors.white,
       );
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: dark
-        ? const Color(0xff101715)
-        : const Color(0xfff1f5f3),
+        ? const Color(0xff121417)
+        : const Color(0xfff4f5f6),
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: scheme.surface,
       elevation: 0,
-      height: 67,
+      height: 64,
     ),
     cardTheme: CardThemeData(
       color: scheme.surface,
@@ -30,12 +31,12 @@ ThemeData appTheme(Brightness brightness) {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
         side: BorderSide(
-          color: dark ? const Color(0xff2b3732) : const Color(0xffdfe7e2),
+          color: dark ? const Color(0xff373e46) : const Color(0xffd8dde3),
         ),
       ),
     ),
     appBarTheme: AppBarTheme(
-      backgroundColor: dark ? const Color(0xff101715) : const Color(0xfff1f5f3),
+      backgroundColor: dark ? const Color(0xff121417) : const Color(0xfff4f5f6),
       surfaceTintColor: Colors.transparent,
     ),
   );

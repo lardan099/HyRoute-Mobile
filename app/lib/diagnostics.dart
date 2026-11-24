@@ -5,6 +5,35 @@ import 'package:flutter/services.dart';
 
 import 'core.dart';
 
+Future<void> pollProbe(
+  DiagnosticsControl core,
+  String scope,
+  String id, {
+  required bool Function() active,
+  required void Function(ProbeSnapshot) report,
+}) async {
+  var snapshot = await core.startProbe(scope, id);
+  while (active()) {
+    report(snapshot);
+    if (snapshot.done) return;
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (!active()) return;
+    snapshot = await core.probeStatus();
+  }
+}
+
+String probeRowLabel(Map<String, dynamic> row) => switch (row['status']) {
+  'ok' => '${row['ms']} мс',
+  'running' => 'Проверка…',
+  'pending' => 'В очереди',
+  'timeout' => 'Тайм-аут',
+  'dns' => 'Ошибка DNS',
+  'configuration' => 'Ошибка профиля',
+  'response' => 'Ответ не 204',
+  'cancelled' => 'Отменено',
+  _ => 'Нет соединения',
+};
+
 class VPNJournalPage extends StatefulWidget {
   const VPNJournalPage({super.key, required this.core});
 
@@ -115,14 +144,13 @@ class _ProbePageState extends State<ProbePage> {
       _snapshot = null;
     });
     try {
-      var snapshot = await widget.core.startProbe(widget.scope, widget.id);
-      while (mounted) {
-        setState(() => _snapshot = snapshot);
-        if (snapshot.done) break;
-        await Future<void>.delayed(const Duration(milliseconds: 400));
-        if (!mounted) break;
-        snapshot = await widget.core.probeStatus();
-      }
+      await pollProbe(
+        widget.core,
+        widget.scope,
+        widget.id,
+        active: () => mounted,
+        report: (snapshot) => setState(() => _snapshot = snapshot),
+      );
     } on Exception {
       if (mounted) setState(() => _failed = true);
     } finally {
@@ -176,17 +204,7 @@ class _ProbePageState extends State<ProbePage> {
               itemCount: results.length,
               itemBuilder: (context, index) {
                 final row = results[index];
-                final label = switch (row['status']) {
-                  'ok' => '${row['ms']} мс',
-                  'running' => 'Проверка…',
-                  'pending' => 'В очереди',
-                  'timeout' => 'Тайм-аут',
-                  'dns' => 'Ошибка DNS',
-                  'configuration' => 'Ошибка профиля',
-                  'response' => 'Ответ не 204',
-                  'cancelled' => 'Отменено',
-                  _ => 'Нет соединения',
-                };
+                final label = probeRowLabel(row);
                 return ListTile(
                   title: Text(row['name'] as String),
                   subtitle: Text(
