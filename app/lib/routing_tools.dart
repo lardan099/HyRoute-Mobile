@@ -354,8 +354,13 @@ class _RouteCheckPageState extends State<RouteCheckPage> {
 }
 
 class SubscriptionDetails extends StatelessWidget {
-  const SubscriptionDetails({super.key, required this.subscription});
+  const SubscriptionDetails({
+    super.key,
+    required this.subscription,
+    this.compact = false,
+  });
   final Subscription subscription;
+  final bool compact;
 
   static String _bytes(int value) {
     const units = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ', 'ПиБ', 'ЭиБ'];
@@ -416,11 +421,12 @@ class SubscriptionDetails extends StatelessWidget {
                     : 'Обновление не удалось · ${timestamp(attempted)}',
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
-            Text(
-              refreshed == null
-                  ? 'Нет даты обновления'
-                  : 'Обновлена ${timestamp(refreshed)}',
-            ),
+            if (!compact)
+              Text(
+                refreshed == null
+                    ? 'Нет даты обновления'
+                    : 'Обновлена ${timestamp(refreshed)}',
+              ),
           ],
         ],
       ),

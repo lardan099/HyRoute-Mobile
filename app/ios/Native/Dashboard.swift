@@ -11,7 +11,7 @@ struct Dashboard: View {
     let selectedID = client.state.selected?.id
     return ScrollView {
       VStack(alignment: .leading, spacing: 18) {
-        connectionCard
+        connectionSummary
         if !client.state.subscriptions.isEmpty {
           LazyVStack(alignment: .leading, spacing: 10) {
             ForEach(client.state.subscriptions) { item in
@@ -79,30 +79,23 @@ struct Dashboard: View {
     client.vpnBusy || [.connecting, .disconnecting, .reasserting].contains(client.vpnStatus)
   }
 
-  private var connectionCard: some View {
+  private var connectionSummary: some View {
     let active = client.vpnStatus.isActiveTunnel
     let signal = active ? HyStyle.accent : HyStyle.muted
-    return VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 12) {
-        ZStack {
-          Circle().fill(signal.opacity(0.10))
-          Circle().strokeBorder(signal.opacity(0.20), lineWidth: 1)
-          if pending { ProgressView().tint(signal) }
-          else { Image(systemName: "power").font(.system(size: 24, weight: .semibold)).foregroundStyle(signal) }
-        }
-        .frame(width: 48, height: 48)
-        .accessibilityHidden(true)
-        Text(status).font(.headline.weight(.semibold))
-          .foregroundStyle(active ? HyStyle.accent : HyStyle.ink)
+    return VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        if pending { ProgressView().tint(signal).accessibilityHidden(true) }
+        else { Circle().fill(signal).frame(width: 8, height: 8).accessibilityHidden(true) }
+        Text(status).font(.subheadline)
+          .foregroundStyle(signal)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("dashboard-vpn-status")
       }
       if let profile = client.state.selected {
-        Divider().overlay(HyStyle.stroke)
         Button { choosingProfile = true } label: {
           HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-              Text(profile.displayTitle).font(.body.weight(.semibold))
+              Text(profile.displayTitle).font(.title2.weight(.semibold))
                 .foregroundStyle(HyStyle.ink)
                 .fixedSize(horizontal: false, vertical: true)
               Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
@@ -127,10 +120,8 @@ struct Dashboard: View {
         .accessibilityIdentifier("dashboard-add-first-subscription")
       }
     }
-    .padding(16)
-    .background {
-      RoundedRectangle(cornerRadius: 22).fill(HyStyle.inset)
-    }
+    .padding(.horizontal, 4)
+    .padding(.vertical, 6)
   }
 }
 
@@ -146,6 +137,7 @@ private struct DashboardSubscription: View {
     let expanded = expansion ?? available.contains { $0.id == selectedID }
     let measuring = measurements.request?.subscriptionID == item.id
     return LazyVStack(alignment: .leading, spacing: 0) {
+      Divider().overlay(HyStyle.stroke)
       HStack(spacing: 8) {
         Button { expansion = !expanded } label: {
           HStack(spacing: 10) {
@@ -190,7 +182,7 @@ private struct DashboardSubscription: View {
         .accessibilityLabel(measuring ? "Остановить замер" : "Проверить серверы \(item.name)")
         .accessibilityIdentifier("dashboard-probe-\(item.id)")
       }
-      .padding(.horizontal, 12).padding(.vertical, 5)
+      .padding(.vertical, 5)
       if expanded {
         Divider().overlay(HyStyle.stroke)
         if measuring {
@@ -227,7 +219,6 @@ private struct DashboardSubscription: View {
         .padding(.horizontal, 15)
       }
     }
-    .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 16))
   }
 
   private func profileRow(_ profile: VPNProfile) -> some View {

@@ -409,7 +409,7 @@ struct SubscriptionDetails: View {
   var embedded = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: embedded ? 4 : 8) {
       if let limit = item.limitBytes, limit > 0, let used = item.usedBytes {
         Text("\(bytes(used)) из \(bytes(limit))").accessibilityIdentifier("subscription-traffic")
         ProgressView(value: min(max(Double(used) / Double(limit), 0), 1))
@@ -432,12 +432,12 @@ struct SubscriptionDetails: View {
             Text("Попытка \(attempted.formatted(date: .abbreviated, time: .shortened))")
           }
         }
-        if let updated = date(item.refreshedAt) {
+        if !embedded, let updated = date(item.refreshedAt) {
           Text("Обновлена \(updated.formatted(date: .abbreviated, time: .shortened))")
         }
       }
     }
-    .font(.subheadline)
+    .font(embedded ? .caption : .subheadline)
     .foregroundStyle(HyStyle.muted)
     .padding(embedded ? 0 : 12)
     .frame(maxWidth: .infinity, alignment: .leading)

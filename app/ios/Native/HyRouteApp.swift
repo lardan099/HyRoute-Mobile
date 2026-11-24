@@ -216,8 +216,7 @@ private struct RootView: View {
               .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
           }
           .frame(maxWidth: .infinity, minHeight: 48)
-          .foregroundStyle(tab == item ? HyStyle.accent : HyStyle.muted)
-          .background(tab == item ? HyStyle.inset : .clear, in: RoundedRectangle(cornerRadius: 11))
+          .foregroundStyle(tab == item ? HyStyle.ink : HyStyle.muted)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -2,16 +2,16 @@ import SwiftUI
 import UIKit
 
 enum HyStyle {
-  static let canvas = adaptive(light: 0xF0F3F5, dark: 0x101620)
-  static let surface = adaptive(light: 0xFFFFFF, dark: 0x181F2B)
-  static let inset = adaptive(light: 0xE8EDF0, dark: 0x232E3D)
-  static let stroke = adaptive(light: 0xD8DFE5, dark: 0x303C4C)
-  static let ink = adaptive(light: 0x181D25, dark: 0xF2F4F3)
-  static let muted = adaptive(light: 0x505D6A, dark: 0xACB7C5)
-  static let accent = adaptive(light: 0x405B1C, dark: 0xD1FB8D)
-  static let fill = accent
-  static let onFill = adaptive(light: 0xFFFFFF, dark: 0x1A2710)
-  static let success = adaptive(light: 0x356335, dark: 0xA9E1A1)
+  static let canvas = adaptive(light: 0xF3F5F3, dark: 0x111312)
+  static let surface = adaptive(light: 0xFAFAFA, dark: 0x171918)
+  static let inset = adaptive(light: 0xE8ECE9, dark: 0x222624)
+  static let stroke = adaptive(light: 0xD9DEDB, dark: 0x343937)
+  static let ink = adaptive(light: 0x1B1E1D, dark: 0xEEEFEE)
+  static let muted = adaptive(light: 0x515A55, dark: 0xA5ABA8)
+  static let accent = adaptive(light: 0x2D605D, dark: 0xA8CECA)
+  static let fill = adaptive(light: 0x1B1E1D, dark: 0xEEEFEE)
+  static let onFill = adaptive(light: 0xFAFAFA, dark: 0x171918)
+  static let success = adaptive(light: 0x29604F, dark: 0x9DCCB8)
   static let failure = adaptive(light: 0xA12D38, dark: 0xFFA3AA)
 
   private static func adaptive(light: UInt32, dark: UInt32) -> Color {
@@ -49,7 +49,7 @@ struct HyButton: ButtonStyle {
       .foregroundStyle(prominent ? HyStyle.onFill : HyStyle.ink)
       .frame(maxWidth: .infinity, minHeight: 48)
       .padding(.horizontal, 12)
-      .background(prominent ? HyStyle.fill : HyStyle.inset, in: RoundedRectangle(cornerRadius: 12))
+      .background(prominent ? HyStyle.fill : HyStyle.inset, in: RoundedRectangle(cornerRadius: 8))
       .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.48)
   }
 }

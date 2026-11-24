@@ -786,48 +786,27 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final connected = _vpnStatus == 'on';
     final signal = connected ? colors.primary : colors.onSurfaceVariant;
     return [
-      Material(
-        color: colors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(22),
-        clipBehavior: Clip.antiAlias,
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Row(
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: signal.withValues(alpha: 0.12),
-                      border: Border.all(color: signal.withValues(alpha: 0.20)),
-                      shape: BoxShape.circle,
-                    ),
-                    child: SizedBox.square(
-                      dimension: 48,
-                      child: Icon(
-                        Icons.power_settings_new_rounded,
-                        color: signal,
-                        size: 25,
-                      ),
-                    ),
+            Row(
+              children: [
+                Icon(Icons.circle, size: 8, color: signal),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _vpnTitle,
+                    style: theme.textTheme.bodyMedium?.copyWith(color: signal),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _vpnTitle,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: connected ? colors.primary : colors.onSurface,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const Divider(height: 1, indent: 16, endIndent: 16),
+            const SizedBox(height: 8),
             if (selected == null)
               ListTile(
+                contentPadding: EdgeInsets.zero,
                 title: const Text('Добавить подписку'),
                 subtitle: const Text('Ссылка или конфиг сервера'),
                 trailing: const Icon(Icons.add_rounded),
@@ -836,10 +815,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             else
               ListTile(
                 key: const ValueKey('primary-profile'),
+                contentPadding: EdgeInsets.zero,
                 title: Text(
                   selected.name,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 subtitle: Text(
@@ -847,7 +827,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   style: theme.textTheme.bodySmall,
                 ),
                 trailing: const Icon(
-                  Icons.swap_vert,
+                  Icons.unfold_more_rounded,
                   semanticLabel: 'Сменить сервер',
                 ),
                 onTap: _importing || _validating ? null : _chooseProfile,
@@ -856,8 +836,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ),
       ),
       if (_subscriptions.isNotEmpty) ...[
-        const SizedBox(height: 10),
-        for (final item in _subscriptions) _homeSubscription(context, item),
+        for (final item in _subscriptions) ...[
+          const Divider(height: 1),
+          _homeSubscription(context, item),
+        ],
       ],
     ];
   }
@@ -893,7 +875,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         return a.compareTo(b);
       });
     }
-    return Card(
+    return Material(
+      color: Colors.transparent,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -960,7 +943,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
-            SubscriptionDetails(subscription: item),
+            SubscriptionDetails(subscription: item, compact: true),
             if (hasLatency)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1083,6 +1066,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Widget _connectionActions() {
     final canStop = _vpnStatus == 'on' || _vpnStatus == 'starting';
     final canStart = _selected != null && ['off', 'error'].contains(_vpnStatus);
+    final colors = Theme.of(context).colorScheme;
     return Material(
       color: Theme.of(context).colorScheme.surface,
       child: Padding(
@@ -1100,6 +1084,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             if (_tab == 0)
               FilledButton.icon(
                 key: const ValueKey('sticky-connect'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: canStop
+                      ? colors.surfaceContainerHigh
+                      : colors.onSurface,
+                  foregroundColor: canStop ? colors.onSurface : colors.surface,
+                  minimumSize: const Size.fromHeight(48),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
                 onPressed: !_changingVpn && (canStart || canStop)
                     ? _toggleVPN
                     : null,
