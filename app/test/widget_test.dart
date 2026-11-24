@@ -908,10 +908,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('home-server-two')));
     await tester.pumpAndSettle();
     expect(core.state.settings.selected, 'two');
-    await _tap(tester, 'Переподключить и применить настройки');
+    await _tap(tester, 'Применить настройки');
     expect(core.stops, 1);
     expect(core.starts, 2);
-    expect(find.text('Переподключить и применить настройки'), findsNothing);
+    expect(find.text('Применить настройки'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

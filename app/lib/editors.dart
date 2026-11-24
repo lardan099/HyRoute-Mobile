@@ -100,7 +100,7 @@ class _SubscriptionEditorState extends State<SubscriptionEditor> {
       canPop: !_busy,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Добавить подписку'),
+          title: const Text('Новая подписка'),
           automaticallyImplyLeading: !_busy,
         ),
         body: SafeArea(

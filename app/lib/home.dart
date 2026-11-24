@@ -1128,7 +1128,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               TextButton.icon(
                 onPressed: _changingVpn ? null : _reconnect,
                 icon: const Icon(Icons.sync_rounded),
-                label: const Text('Переподключить и применить настройки'),
+                label: const Text('Применить настройки'),
               ),
             if (_reconnectError case final String message)
               _inlineError(message),
