@@ -113,7 +113,8 @@ struct RulesPage: View {
   private var ruleList: some View {
     List {
       Button { editing = RuleDraft(rule: RouteRule()) } label: {
-        Label("Добавить правило", systemImage: "plus")
+        Text("Добавить правило")
+          .fixedSize(horizontal: false, vertical: true)
       }
       .buttonStyle(HyButton())
       .accessibilityIdentifier("rules-add")
