@@ -82,9 +82,3 @@ struct ProbeCommand: Codable {
   var id: String?
   var state: String?
 }
-
-struct TrafficCommand: Codable {
-  enum Action: String, Codable { case trafficStatus, trafficSet, trafficClear, vpnJournal }
-  let action: Action
-  var enabled: Bool?
-}

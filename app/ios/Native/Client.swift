@@ -231,6 +231,7 @@ final class Client: ObservableObject, VPNCommandTarget {
   private var stateRevision = 0
   private var startingFingerprint: Data?
   private var privateTunnelJournal: [VPNJournalEvent] = []
+  private var trafficRevision = 0
   private var runningCommand = false
   private var startupReport: UUID?
   @Published private(set) var preferencesPending = false
@@ -604,10 +605,38 @@ final class Client: ObservableObject, VPNCommandTarget {
   }
 
   private func updateTraffic(_ command: TrafficCommand) async throws {
-    guard vpnStatus == .connected, let session = manager?.connection as? NETunnelProviderSession else { return }
-    let response = try await session.hyRouteMessage(JSONEncoder().encode(command))
-    guard !Task.isCancelled, vpnStatus == .connected, session === manager?.connection else { return }
-    trafficEvents = try JSONDecoder().decode([TrafficEvent].self, from: response)
+    guard vpnStatus == .connected else { return }
+    guard let owner = manager, let session = owner.connection as? NETunnelProviderSession else {
+      throw CoreError.invalidResult
+    }
+
+    let reading = command.action == .trafficStatus
+    if !reading { trafficRevision += 1 }
+    let revision = trafficRevision
+    let attempt = attemptID
+    let token = UUID()
+    let encoder = JSONEncoder()
+    var request = command
+    request.transfer = token
+
+    do {
+      let first = try await session.hyRouteMessage(encoder.encode(request))
+      if reading {
+        let response = try await TrafficJournalTransfer.read(first: first) { offset in
+          let page = TrafficCommand(action: .trafficChunk, transfer: token, offset: offset)
+          return try await session.hyRouteMessage(encoder.encode(page))
+        }
+        guard !Task.isCancelled, revision == trafficRevision, attempt == attemptID,
+              vpnStatus == .connected, manager === owner else { return }
+        trafficEvents = try JSONDecoder().decode([TrafficEvent].self, from: response)
+      } else if !first.isEmpty && first.first != UInt8(ascii: "[") {
+        throw TrafficJournalTransfer.InvalidResponse()
+      }
+    } catch {
+      if reading && (Task.isCancelled || revision != trafficRevision || attempt != attemptID ||
+                     vpnStatus != .connected || manager !== owner) { return }
+      throw error
+    }
   }
 
   func probeHandle(scope: String, id: String) async throws -> ProbeHandle {

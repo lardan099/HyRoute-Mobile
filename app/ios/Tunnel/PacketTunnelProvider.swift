@@ -16,6 +16,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private var session: NSObject?
   private var prepared: NSObject?
   private var trafficLogging = false
+  private var trafficSnapshot: TrafficJournalTransfer?
   private var networkMonitor: NWPathMonitor?
   private var chainRecovery = ChainRecoveryPolicy()
   private var probe: NSObject?
@@ -134,6 +135,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
           self.packetBridge = bridge
           self.session = session
           self.prepared = prepared
+          self.trafficSnapshot = nil
           self.trafficLogging = request.trafficLogging
           HyRouteSetTrafficLogging(session, self.trafficLogging)
           bridge.start()
@@ -201,6 +203,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     cancelProbe()
     if let session { HyRouteStopVPN(session) }
     session = nil
+    trafficSnapshot = nil
     // Xray duplicates this descriptor. Keep the Network Extension link and routes
     // installed while the new core creates fresh transport sessions.
     if let restarted = HyRouteStartVPN(prepared, packetBridge.coreFD) {
@@ -228,6 +231,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       self.cancelProbe()
       if let session = self.session { HyRouteStopVPN(session) }
       self.session = nil
+      self.trafficSnapshot = nil
       self.prepared = nil
       self.reasserting = false
       self.chainRecovery = ChainRecoveryPolicy()
@@ -250,14 +254,29 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
           return
         }
         switch command.action {
-        case .trafficStatus, .vpnJournal: break
+        case .trafficStatus:
+          if let token = command.transfer {
+            self.trafficSnapshot = TrafficJournalTransfer(token: token, snapshot: Data(HyRouteTrafficEvents(session).utf8))
+            completionHandler?(self.trafficSnapshot?.page(at: 0))
+            return
+          }
+        case .trafficChunk:
+          guard let snapshot = self.trafficSnapshot, snapshot.token == command.transfer,
+                let offset = command.offset else {
+            completionHandler?(nil)
+            return
+          }
+          completionHandler?(snapshot.page(at: offset))
+          return
         case .trafficSet:
           self.trafficLogging = command.enabled == true
           HyRouteSetTrafficLogging(session, self.trafficLogging)
         case .trafficClear:
           HyRouteClearTrafficEvents(session)
+          self.trafficSnapshot = nil
+        case .vpnJournal: break
         }
-        completionHandler?(Data(HyRouteTrafficEvents(session).utf8))
+        completionHandler?(command.transfer == nil ? Data(HyRouteTrafficEvents(session).utf8) : Data())
         return
       }
       if data.count <= 64 * 1024, let transfer = try? PropertyListDecoder().decode(GeodataTransfer.self, from: data) {

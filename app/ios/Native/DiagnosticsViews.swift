@@ -275,7 +275,7 @@ struct TrafficJournalPage: View {
   @State private var onlyErrors = false
   @State private var writing = false
   @State private var issue: String?
-  @State private var readFailed = false
+  @State private var readIssue: String?
   @State private var confirmingClear = false
 
   private var visible: [TrafficEvent] {
@@ -302,9 +302,7 @@ struct TrafficJournalPage: View {
           Text("Адреса хранятся в памяти VPN. После остановки доступны записи, которые уже открыло приложение.")
             .font(.footnote).foregroundStyle(HyStyle.muted)
           if let issue { Text(issue).font(.footnote).foregroundStyle(HyStyle.failure) }
-          if readFailed {
-            Text("VPN не ответил на запрос журнала.").font(.footnote).foregroundStyle(HyStyle.failure)
-          }
+          if let readIssue { Text(readIssue).font(.footnote).foregroundStyle(HyStyle.failure) }
         }
         .padding(.vertical, 4)
         Button { onlyErrors.toggle() } label: {
@@ -348,11 +346,20 @@ struct TrafficJournalPage: View {
     .searchable(text: $search, prompt: "Адрес, профиль или номер")
     .scrollDismissesKeyboard(.interactively)
     .task(id: client.vpnStatus) {
+      readIssue = nil
       guard client.vpnStatus == .connected else { return }
       while !Task.isCancelled {
         if !writing {
-          do { try await client.refreshTrafficLog(); readFailed = false }
-          catch { if !Task.isCancelled { readFailed = true } }
+          do {
+            try await client.refreshTrafficLog()
+            if !Task.isCancelled { readIssue = nil }
+          } catch {
+            if !Task.isCancelled {
+              readIssue = error is DecodingError || error is TrafficJournalTransfer.InvalidResponse
+                ? "Не удалось прочитать ответ журнала VPN."
+                : "VPN не ответил на запрос журнала."
+            }
+          }
         }
         do { try await Task.sleep(for: .seconds(2)) } catch { return }
       }
@@ -390,6 +397,7 @@ struct TrafficJournalPage: View {
     if !client.trafficEvents.isEmpty { return "Под фильтр ничего не попало." }
     if !client.trafficLogging { return "Включите запись подключений." }
     if client.vpnStatus != .connected { return "Подключите VPN, чтобы увидеть события." }
+    if readIssue != nil { return "События журнала пока недоступны." }
     return "Откройте сайт или приложение. Здесь появится его маршрут."
   }
 

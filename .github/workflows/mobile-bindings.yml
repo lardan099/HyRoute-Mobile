@@ -170,6 +170,8 @@ jobs:
           "$RUNNER_TEMP/hyroute-geodata-test"
           swiftc -o "$RUNNER_TEMP/hyroute-command-test" Native/VPNCommand.swift NativeTests/VPNCommandTests.swift
           "$RUNNER_TEMP/hyroute-command-test"
+          swiftc -o "$RUNNER_TEMP/hyroute-traffic-test" Native/TrafficJournalTransfer.swift NativeTests/TrafficJournalTransferTests.swift
+          "$RUNNER_TEMP/hyroute-traffic-test"
       - name: Build unsigned iPhone IPA
         if: inputs.build_apps && matrix.platform == 'iOS'
         working-directory: app/ios
