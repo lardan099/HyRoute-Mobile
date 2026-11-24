@@ -129,6 +129,10 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertTrue(copy.isEnabled)
     tap(copy)
     XCTAssertTrue(app.navigationBars["Журнал VPN"].exists)
+    tap(app.buttons["tab-subscriptions"])
+    tap(app.buttons["Добавить подписку"])
+    XCTAssertTrue(app.textViews["import-input"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["import-submit"].isEnabled)
   }
 
   func testCancellingProbeRestoresLastMeasuredResult() {

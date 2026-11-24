@@ -626,11 +626,26 @@ struct ImportSheet: View {
     .task {
       guard !offeredClipboard else { return }
       offeredClipboard = true
-      guard input.isEmpty, UIPasteboard.general.hasStrings else { return }
-      if let value = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) {
+      let pasteboard = UIPasteboard.general
+      let revision = pasteboard.changeCount
+      if !pasteboard.hasURLs {
+        guard pasteboard.hasStrings else { return }
+        let matches = try? await pasteboard.detectedPatterns(for: [\.probableWebURL, \.links])
+        guard matches?.isEmpty == false else { return }
+      }
+      guard !Task.isCancelled, input.isEmpty, revision == pasteboard.changeCount else { return }
+      let text = pasteboard.hasStrings ? pasteboard.string : pasteboard.url?.absoluteString
+      if let value = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+         value.split(whereSeparator: \.isNewline).contains(where: isSubscriptionLink) {
         input = value
       }
     }
     .interactiveDismissDisabled(client.busy)
+  }
+
+  private func isSubscriptionLink(_ line: Substring) -> Bool {
+    guard let url = URLComponents(string: line.trimmingCharacters(in: .whitespaces)),
+          url.host?.isEmpty == false, let scheme = url.scheme?.lowercased() else { return false }
+    return ["https", "vless", "hysteria2", "hy2"].contains(scheme)
   }
 }
