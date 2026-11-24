@@ -29,6 +29,48 @@ class _SubscriptionEditorState extends State<SubscriptionEditor> {
   var _busy = false;
   String? _error;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _offerClipboard());
+  }
+
+  Future<void> _offerClipboard() async {
+    if (!mounted ||
+        !await Clipboard.hasStrings() ||
+        !mounted ||
+        ModalRoute.of(context)?.isCurrent != true ||
+        _input.text.isNotEmpty) {
+      return;
+    }
+    final allowed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Разрешить вставку?'),
+        content: const Text('Вставить ссылку или конфиг из буфера обмена.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Не сейчас'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Разрешить'),
+          ),
+        ],
+      ),
+    );
+    if (allowed != true || !mounted || _input.text.isNotEmpty) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted || _input.text.isNotEmpty) return;
+    final value = data?.text?.trim() ?? '';
+    if (value.isEmpty) return;
+    setState(() {
+      _input.text = value;
+      _error = null;
+    });
+  }
+
   Future<void> _submit() async {
     setState(() {
       _busy = true;
@@ -81,29 +123,6 @@ class _SubscriptionEditorState extends State<SubscriptionEditor> {
                         labelText: 'Ссылка или конфиг',
                         hintText: 'https://…',
                         alignLabelWithHint: true,
-                      ),
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        icon: const Icon(Icons.content_paste_rounded),
-                        label: const Text('Вставить из буфера'),
-                        onPressed: _busy
-                            ? null
-                            : () async {
-                                final text = (await Clipboard.getData(
-                                  Clipboard.kTextPlain,
-                                ))?.text;
-                                if (!mounted) return;
-                                setState(() {
-                                  if (text == null || text.trim().isEmpty) {
-                                    _error = 'Буфер обмена пуст.';
-                                  } else {
-                                    _input.text = text;
-                                    _error = null;
-                                  }
-                                });
-                              },
                       ),
                     ),
                   ],

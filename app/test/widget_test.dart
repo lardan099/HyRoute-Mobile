@@ -587,6 +587,55 @@ void main() {
     ]);
   });
 
+  testWidgets(
+    'reads the clipboard only after permission on the import screen',
+    (tester) async {
+      var metadataChecks = 0;
+      var reads = 0;
+      const url = 'https://example.org/test-subscription';
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.hasStrings') {
+          metadataChecks++;
+          return {'value': true};
+        }
+        if (call.method == 'Clipboard.getData') {
+          reads++;
+          return {'text': '  $url\n'};
+        }
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      final core = await _openApp(tester);
+      expect(metadataChecks, 0);
+      await _tap(tester, 'Подписки');
+      await _tap(tester, 'Добавить подписку');
+      expect(find.text('Разрешить вставку?'), findsOneWidget);
+      expect(reads, 0);
+      await _tap(tester, 'Не сейчас');
+      expect(reads, 0);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        isEmpty,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await _tap(tester, 'Добавить подписку');
+      await _tap(tester, 'Разрешить');
+      expect(reads, 1);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        url,
+      );
+      expect(core.input, isNull);
+      await _tap(tester, 'Импортировать');
+      expect(core.input, url);
+    },
+  );
+
   testWidgets('imports after the subscription tab saves its scroll offset', (
     tester,
   ) async {

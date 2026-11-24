@@ -559,6 +559,7 @@ struct ImportSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var input = ""
   @State private var error: String?
+  @State private var offeredClipboard = false
 
   var body: some View {
     NavigationStack {
@@ -577,10 +578,6 @@ struct ImportSheet: View {
               .accessibilityLabel("Ссылка или конфиг подписки")
               .accessibilityIdentifier("import-input")
               .onChange(of: input) { _ in error = nil }
-            PasteButton(payloadType: String.self) { values in
-              if let first = values.first { input = first; error = nil }
-            }
-            .accessibilityLabel("Вставить подписку")
           }
           .hyCard()
         }
@@ -624,6 +621,14 @@ struct ImportSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(client.busy) }
+      }
+    }
+    .task {
+      guard !offeredClipboard else { return }
+      offeredClipboard = true
+      guard input.isEmpty, UIPasteboard.general.hasStrings else { return }
+      if let value = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        input = value
       }
     }
     .interactiveDismissDisabled(client.busy)
