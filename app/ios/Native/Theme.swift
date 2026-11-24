@@ -54,6 +54,16 @@ struct HyButton: ButtonStyle {
   }
 }
 
+struct HyPress: ButtonStyle {
+  @Environment(\.isEnabled) private var isEnabled
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .opacity(isEnabled ? (configuration.isPressed ? 0.62 : 1) : 0.48)
+      .animation(nil, value: configuration.isPressed)
+  }
+}
+
 struct HyRow: View {
   let title: String
   let symbol: String

@@ -95,10 +95,11 @@ struct Dashboard: View {
         Button { choosingProfile = true } label: {
           HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-              Text(profile.displayTitle).font(.title2.weight(.semibold))
+              Text(profile.displayTitle).font(.title.weight(.semibold))
+                .tracking(-0.45)
                 .foregroundStyle(HyStyle.ink)
                 .fixedSize(horizontal: false, vertical: true)
-              Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
+              Text(profile.transport).font(.footnote).foregroundStyle(HyStyle.muted)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.up.chevron.down").font(.subheadline.weight(.semibold))
@@ -107,7 +108,7 @@ struct Dashboard: View {
           .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
           .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HyPress())
         .accessibilityLabel("Основной профиль")
         .accessibilityValue(profile.displayTitle)
         .accessibilityIdentifier("profilePicker")
@@ -145,7 +146,7 @@ private struct DashboardSubscription: View {
               .font(.caption.weight(.semibold)).frame(width: 15)
               .foregroundStyle(HyStyle.muted).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-              Text(item.name).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink)
+              Text(item.name).font(.headline).foregroundStyle(HyStyle.ink)
                 .fixedSize(horizontal: false, vertical: true)
               Text("Доступно \(available.count)").font(.caption).foregroundStyle(HyStyle.muted)
             }
@@ -153,7 +154,7 @@ private struct DashboardSubscription: View {
           }
           .frame(minHeight: 46).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HyPress())
         .accessibilityIdentifier("dashboard-subscription-\(item.id)")
         .accessibilityValue(expanded ? "Развёрнута" : "Свёрнута")
         if item.canRefresh == true {
@@ -162,7 +163,7 @@ private struct DashboardSubscription: View {
               .foregroundStyle(HyStyle.accent).frame(width: 44, height: 44)
               .contentShape(Rectangle())
           }
-          .buttonStyle(.plain)
+          .buttonStyle(HyPress())
           .disabled(client.busy || measuring)
           .accessibilityLabel("Обновить подписку \(item.name)")
         }
@@ -177,7 +178,7 @@ private struct DashboardSubscription: View {
             .foregroundStyle(HyStyle.accent).frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HyPress())
         .disabled(!measuring && (client.busy || measurements.request != nil || available.isEmpty))
         .accessibilityLabel(measuring ? "Остановить замер" : "Проверить серверы \(item.name)")
         .accessibilityIdentifier("dashboard-probe-\(item.id)")
@@ -214,7 +215,7 @@ private struct DashboardSubscription: View {
           .frame(minHeight: 44)
           .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HyPress())
         .accessibilityIdentifier("dashboard-server-details-\(item.id)")
         .padding(.horizontal, 15)
       }
@@ -228,14 +229,14 @@ private struct DashboardSubscription: View {
     return Button { Task { _ = await client.select(profile.id) } } label: {
       HStack(spacing: 10) {
         VStack(alignment: .leading, spacing: 3) {
-          Text(profile.displayTitle).font(.subheadline.weight(.semibold))
+          Text(profile.displayTitle).font(.body.weight(selected ? .medium : .regular))
             .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)
-          Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
+          Text(profile.transport).font(.footnote).foregroundStyle(HyStyle.muted)
         }
         .layoutPriority(1)
         Spacer(minLength: 2)
         if let delay {
-          Text(delay).font(.caption.monospacedDigit())
+          Text(delay).font(.footnote.monospacedDigit())
             .foregroundStyle(rows.contains { $0.ms != nil } ? HyStyle.success : HyStyle.muted)
             .accessibilityHidden(true)
         }
@@ -248,7 +249,7 @@ private struct DashboardSubscription: View {
       .padding(.horizontal, 15)
       .background(selected ? HyStyle.accent.opacity(0.08) : .clear)
     }
-    .buttonStyle(.plain)
+    .buttonStyle(HyPress())
     .disabled(client.busy)
     .accessibilityAddTraits(selected ? .isSelected : [])
     .accessibilityIdentifier("dashboard-profile-\(profile.id)")

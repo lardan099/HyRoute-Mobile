@@ -141,11 +141,11 @@ struct RulesPage: View {
           HStack(spacing: 10) {
             HyIcon(symbol: unavailable ? "exclamationmark.triangle" : rule.action.symbol, size: 32)
             VStack(alignment: .leading, spacing: 3) {
-              Text(rule.title).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink)
+              Text(rule.title).font(.body.weight(.medium)).foregroundStyle(HyStyle.ink)
                 .lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
                 .fixedSize(horizontal: false, vertical: true)
               Text(rule.profile.map(client.state.profileTitle) ?? rule.action.label)
-                .font(.subheadline).foregroundStyle(unavailable ? HyStyle.failure : HyStyle.muted)
+                .font(.footnote).foregroundStyle(unavailable ? HyStyle.failure : HyStyle.muted)
                 .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

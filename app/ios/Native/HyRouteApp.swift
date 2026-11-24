@@ -262,11 +262,11 @@ struct ProfileRow: View {
   var body: some View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text(profile.displayTitle).font(.body.weight(.semibold))
+        Text(profile.displayTitle).font(.body.weight(selected ? .medium : .regular))
           .foregroundStyle(HyStyle.ink).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
           .fixedSize(horizontal: false, vertical: true)
         Text(profile.missing == true ? "Сервер недоступен" : profile.transport)
-          .font(.subheadline).foregroundStyle(HyStyle.muted)
+          .font(.footnote).foregroundStyle(HyStyle.muted)
           .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -479,8 +479,12 @@ struct SubscriptionPage: View {
       } label: {
         Label(runningHere ? "Остановить" : "Проверить все",
               systemImage: runningHere ? "stop.circle" : "speedometer")
+          .font(.body.weight(.medium))
+          .foregroundStyle(HyStyle.accent)
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .contentShape(Rectangle())
       }
-      .buttonStyle(HyButton(prominent: !runningHere))
+      .buttonStyle(HyPress())
       .accessibilityIdentifier("subscription-check-all")
       .disabled(!runningHere && (client.busy || measurements.request != nil || !item.servers.contains { $0.missing != true }))
       if measurements.failedSubscription == id {

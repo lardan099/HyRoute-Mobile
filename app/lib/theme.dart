@@ -20,7 +20,7 @@ ThemeData appTheme(Brightness brightness) {
             ? const Color(0xff343937)
             : const Color(0xffd9dedb),
       );
-  return ThemeData(
+  final theme = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: dark
@@ -54,5 +54,35 @@ ThemeData appTheme(Brightness brightness) {
       surfaceTintColor: Colors.transparent,
     ),
     dividerTheme: DividerThemeData(color: scheme.outlineVariant),
+  );
+  final type = theme.textTheme;
+  return theme.copyWith(
+    textTheme: type.copyWith(
+      headlineSmall: type.headlineSmall?.copyWith(
+        height: 1.16,
+        letterSpacing: -0.45,
+        fontWeight: FontWeight.w600,
+      ),
+      titleLarge: type.titleLarge?.copyWith(
+        height: 1.2,
+        letterSpacing: -0.25,
+        fontWeight: FontWeight.w600,
+      ),
+      titleMedium: type.titleMedium?.copyWith(
+        height: 1.25,
+        letterSpacing: 0,
+        fontWeight: FontWeight.w500,
+      ),
+      bodyMedium: type.bodyMedium?.copyWith(height: 1.36, letterSpacing: 0),
+      bodySmall: type.bodySmall?.copyWith(
+        fontSize: 13,
+        height: 1.34,
+        letterSpacing: 0.12,
+      ),
+      labelLarge: type.labelLarge?.copyWith(
+        letterSpacing: 0,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
   );
 }

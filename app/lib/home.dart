@@ -665,10 +665,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               : _tab == 1
               ? 'Серверы'
               : 'Маршрутизация',
-          style: const TextStyle(
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-          ),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
         actions: [
           if (_tab == 0 &&
@@ -818,9 +815,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 contentPadding: EdgeInsets.zero,
                 title: Text(
                   selected.name,
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: theme.textTheme.headlineSmall,
                 ),
                 subtitle: Text(
                   selected.protocol,
@@ -892,7 +887,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   ),
                   title: Text(
                     item.title.isEmpty ? 'Импортированные серверы' : item.title,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
                   subtitle: Text('Доступно ${servers.length}'),
                   onTap: () => setState(
@@ -999,6 +994,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   Text(
                     delay,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      fontFeatures: const [FontFeature.tabularFigures()],
                       color: ms == null
                           ? colors.onSurfaceVariant
                           : colors.primary,
