@@ -407,6 +407,7 @@ struct RouteCheckPage: View {
 struct SubscriptionDetails: View {
   let item: Subscription
   var embedded = false
+  var showRefreshFailure = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: embedded ? 4 : 8) {
@@ -425,7 +426,7 @@ struct SubscriptionDetails: View {
         Text("\(label) \(expiry.formatted(date: .abbreviated, time: .omitted))")
       }
       if item.canRefresh == true {
-        if item.refreshFailed == true {
+        if item.refreshFailed == true && !embedded && showRefreshFailure {
           Label("Обновление не удалось", systemImage: "exclamationmark.circle")
             .foregroundStyle(HyStyle.failure)
           if let attempted = date(item.attemptedAt) {

@@ -34,12 +34,6 @@ struct RulesPage: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       if pane == .rules {
-        ToolbarItem(placement: .primaryAction) {
-          Button { editing = RuleDraft(rule: RouteRule()) } label: {
-            Label("Добавить правило", systemImage: "plus")
-          }
-          .accessibilityIdentifier("rules-add")
-        }
         if !routing.rules.isEmpty {
           ToolbarItem(placement: .primaryAction) { EditButton().accessibilityIdentifier("rules-edit") }
         }
@@ -118,15 +112,20 @@ struct RulesPage: View {
 
   private var ruleList: some View {
     List {
+      Button { editing = RuleDraft(rule: RouteRule()) } label: {
+        Label("Добавить правило", systemImage: "plus")
+      }
+      .buttonStyle(HyButton())
+      .accessibilityIdentifier("rules-add")
+      .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 16))
+      .listRowSeparator(.hidden)
+      .listRowBackground(HyStyle.canvas)
       ruleTools
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         .listRowBackground(HyStyle.canvas)
       if routing.rules.isEmpty {
-        Button { editing = RuleDraft(rule: RouteRule()) } label: {
-          HyRow(title: "Добавить первое правило", symbol: "plus", disclosure: false)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(HyStyle.canvas)
+        Text("Правил пока нет").font(.subheadline).foregroundStyle(HyStyle.muted)
+          .listRowBackground(HyStyle.canvas)
       }
       if routing.rules.count > 1 {
         Text("Срабатывает первое подходящее правило сверху.")
@@ -139,12 +138,11 @@ struct RulesPage: View {
         let unavailable = rule.hasUnavailableProfile(available: available)
         Button { editRule(index) } label: {
           HStack(spacing: 10) {
-            HyIcon(symbol: unavailable ? "exclamationmark.triangle" : rule.action.symbol, size: 32)
             VStack(alignment: .leading, spacing: 3) {
               Text(rule.title).font(.body.weight(.medium)).foregroundStyle(HyStyle.ink)
                 .lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
                 .fixedSize(horizontal: false, vertical: true)
-              Text(rule.profile.map(client.state.profileTitle) ?? rule.action.label)
+              Text(unavailable ? "Профиль недоступен" : rule.profile.map(client.state.profileTitle) ?? rule.action.label)
                 .font(.footnote).foregroundStyle(unavailable ? HyStyle.failure : HyStyle.muted)
                 .fixedSize(horizontal: false, vertical: true)
             }

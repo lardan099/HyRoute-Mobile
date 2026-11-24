@@ -120,8 +120,8 @@ private struct RootView: View {
           if !keyboardVisible {
             if client.canApplyVPNChanges || client.restartingVPN {
               ViewThatFits(in: .horizontal) {
-                HStack { Text("Настройки изменились"); Spacer(); reconnectButton }
-                VStack(alignment: .leading, spacing: 8) { Text("Настройки изменились"); reconnectButton }
+                HStack { Text("Изменения VPN ждут применения"); Spacer(); reconnectButton }
+                VStack(alignment: .leading, spacing: 8) { Text("Изменения VPN ждут применения"); reconnectButton }
               }
               .font(.subheadline)
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -148,7 +148,7 @@ private struct RootView: View {
       #if targetEnvironment(simulator)
       if previewScreen == "routes-test", await client.loadRoutingFixture() { return }
       if let previewScreen, client.loadLayoutPreview() {
-        if previewScreen == "servers" { tab = .subscriptions }
+        if ["servers", "subscriptions"].contains(previewScreen) { tab = .subscriptions }
         if ["rules", "routing", "chains"].contains(previewScreen) { tab = .rules }
         return
       }
@@ -186,7 +186,7 @@ private struct RootView: View {
   }
 
   private var reconnectButton: some View {
-    Button(client.restartingVPN ? "Переподключаем…" : "Переподключить") {
+    Button(client.restartingVPN ? "Переподключаем…" : "Применить") {
       Task { await client.reconnectVPN() }
     }
     .buttonStyle(.borderedProminent)
@@ -216,10 +216,12 @@ private struct RootView: View {
               .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
           }
           .frame(maxWidth: .infinity, minHeight: 48)
-          .foregroundStyle(tab == item ? HyStyle.ink : HyStyle.muted)
+          .foregroundStyle(tab == item ? HyStyle.accent : HyStyle.muted)
+          .background(tab == item ? HyStyle.accent.opacity(0.10) : .clear,
+                      in: RoundedRectangle(cornerRadius: 12))
           .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HyPress())
         .accessibilityIdentifier("tab-\(item)")
         .accessibilityAddTraits(tab == item ? .isSelected : [])
       }
@@ -271,7 +273,7 @@ struct ProfileRow: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .layoutPriority(1)
-      if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.accent) }
+      if selected { Image(systemName: "checkmark").font(.footnote.weight(.semibold)).foregroundStyle(HyStyle.accent) }
     }
     .frame(minHeight: 44)
     .contentShape(Rectangle())
@@ -336,18 +338,6 @@ private struct SubscriptionsPage: View {
         item.servers.contains { $0.displayTitle.localizedCaseInsensitiveContains(search) }
     }
     return List {
-      Section {
-        NavigationLink {
-          ServerGroupsPage(client: client)
-        } label: {
-          let count = client.state.serverGroups?.count ?? 0
-          HyRow(title: "Группы серверов", symbol: "square.stack.3d.up",
-                detail: count > 0 ? "Групп: \(count)" : nil, disclosure: false)
-        }
-        .accessibilityIdentifier("manage-server-groups")
-        .listRowBackground(HyStyle.surface)
-      }
-
       if client.state.subscriptions.isEmpty {
         Section {
           VStack(alignment: .leading, spacing: 12) {
@@ -363,7 +353,7 @@ private struct SubscriptionsPage: View {
         Text("Серверы и подписки не найдены.").foregroundStyle(HyStyle.muted)
           .listRowBackground(HyStyle.canvas)
       } else {
-        Section("Мои подписки") {
+        Section {
           ForEach(visible) { item in
             NavigationLink {
               SubscriptionPage(
@@ -371,13 +361,31 @@ private struct SubscriptionsPage: View {
                 initialQuery: item.name.localizedCaseInsensitiveContains(search) ? "" : search
               )
             } label: {
-              HyRow(title: item.name, symbol: "link",
-                    detail: "Серверов: \(item.servers.filter { $0.missing != true }.count)", disclosure: false)
+              VStack(alignment: .leading, spacing: 5) {
+                Text(item.name).font(.headline).foregroundStyle(HyStyle.ink)
+                Text("Серверов: \(item.servers.filter { $0.missing != true }.count)")
+                  .font(.footnote).foregroundStyle(HyStyle.muted)
+                if client.refreshFailed(item) {
+                  Text("Обновление не удалось").font(.footnote).foregroundStyle(HyStyle.failure)
+                }
+              }
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+              .padding(.vertical, 4)
             }
             .accessibilityIdentifier("subscription-\(item.id)")
             .listRowBackground(HyStyle.surface)
           }
         }
+      }
+      Section {
+        NavigationLink {
+          ServerGroupsPage(client: client)
+        } label: {
+          HyRow(title: "Группы серверов", symbol: "square.stack.3d.up", disclosure: false)
+        }
+        .accessibilityIdentifier("manage-server-groups")
+        .listRowBackground(HyStyle.surface)
       }
     }
     .hyList()
@@ -418,9 +426,10 @@ struct SubscriptionPage: View {
         search.isEmpty || profile.displayTitle.localizedCaseInsensitiveContains(search)
       }
       ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+          probeControls(item)
           if item.hasMetadata {
-            SubscriptionDetails(item: item)
+            SubscriptionDetails(item: item, showRefreshFailure: false)
           }
           if visible.isEmpty {
             Text(item.servers.isEmpty ? "В подписке пока нет серверов." : "Серверы не найдены.")
@@ -441,25 +450,10 @@ struct SubscriptionPage: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
       }
-      .safeAreaInset(edge: .top, spacing: 0) {
-        probeControls(item)
-      }
       .hyScreen()
       .searchable(text: $query, prompt: "Найти сервер")
       .navigationTitle(item.name)
       .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        if item.canRefresh == true {
-          ToolbarItem(placement: .primaryAction) {
-            Button { Task { await client.refresh(id) } } label: {
-              if client.busy { ProgressView().tint(HyStyle.accent) }
-              else { Label("Обновить подписку", systemImage: "arrow.clockwise") }
-            }
-            .disabled(client.busy || runningHere)
-            .accessibilityIdentifier("subscription-refresh")
-          }
-        }
-      }
     } else {
       Text("Подписка недоступна").foregroundStyle(HyStyle.muted)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -473,28 +467,46 @@ struct SubscriptionPage: View {
       if runningHere {
         ProgressView().tint(HyStyle.accent).accessibilityLabel("Идёт замер задержки")
       }
-      Button {
-        if runningHere { measurements.cancel() }
-        else { measurements.start(item) }
-      } label: {
-        Label(runningHere ? "Остановить" : "Проверить все",
-              systemImage: runningHere ? "stop.circle" : "speedometer")
-          .font(.body.weight(.medium))
-          .foregroundStyle(HyStyle.accent)
-          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-          .contentShape(Rectangle())
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) { subscriptionActions(item, singleLine: true) }
+        VStack(spacing: 8) { subscriptionActions(item, singleLine: false) }
       }
-      .buttonStyle(HyPress())
-      .accessibilityIdentifier("subscription-check-all")
-      .disabled(!runningHere && (client.busy || measurements.request != nil || !item.servers.contains { $0.missing != true }))
+      if client.refreshFailed(item) {
+        Text("Обновление не удалось. Список сохранён.")
+          .font(.subheadline).foregroundStyle(HyStyle.failure)
+          .accessibilityIdentifier("subscription-refresh-error")
+      }
       if measurements.failedSubscription == id {
         Text("Не удалось выполнить замер").font(.subheadline).foregroundStyle(HyStyle.failure)
           .accessibilityIdentifier("subscription-probe-error")
       }
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 6)
-    .background(HyStyle.canvas)
+  }
+
+  @ViewBuilder private func subscriptionActions(_ item: Subscription, singleLine: Bool) -> some View {
+    if item.canRefresh == true {
+      Button { Task { await client.refresh(id) } } label: {
+        if client.refreshingSubscription == id { ProgressView().tint(HyStyle.accent) }
+        else {
+          Label("Обновить", systemImage: "arrow.clockwise")
+            .fixedSize(horizontal: singleLine, vertical: true)
+        }
+      }
+      .buttonStyle(HyButton(prominent: false))
+      .disabled(client.busy || runningHere)
+      .accessibilityIdentifier("subscription-refresh")
+    }
+    Button {
+      if runningHere { measurements.cancel() }
+      else { measurements.start(item) }
+    } label: {
+      Label(runningHere ? "Остановить" : "Проверить все",
+            systemImage: runningHere ? "stop.circle" : "speedometer")
+        .fixedSize(horizontal: singleLine, vertical: true)
+    }
+    .buttonStyle(HyButton(prominent: false))
+    .accessibilityIdentifier("subscription-check-all")
+    .disabled(!runningHere && (client.busy || measurements.request != nil || !item.servers.contains { $0.missing != true }))
   }
 
   private func serverRow(_ profile: VPNProfile, in item: Subscription) -> some View {
@@ -579,7 +591,6 @@ struct ImportSheet: View {
               .accessibilityIdentifier("import-input")
               .onChange(of: input) { _ in error = nil }
           }
-          .hyCard()
         }
         .padding(16)
       }

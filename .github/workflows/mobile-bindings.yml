@@ -223,7 +223,7 @@ jobs:
           bundle="$output/Build/Products/Debug-iphonesimulator/HyRoute.app"
           test -d "$bundle"
           xcrun simctl install "$device" "$bundle"
-          for screen in home servers rules routing chains vpn-log traffic; do
+          for screen in home subscriptions servers rules routing chains vpn-log traffic empty; do
             SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
               xcrun simctl launch --terminate-running-process "$device" io.hyroute.hyrouteMobile
             sleep 5
@@ -273,7 +273,7 @@ jobs:
           xcrun simctl ui "$compact" content_size accessibility-large
           bundle="$output/Build/Products/Debug-iphonesimulator/HyRoute.app"
           xcrun simctl install "$compact" "$bundle"
-          for screen in home rules chains; do
+          for screen in home subscriptions rules chains; do
             SIMCTL_CHILD_HYROUTE_LAYOUT_PREVIEW="$screen" \
               xcrun simctl launch --terminate-running-process "$compact" io.hyroute.hyrouteMobile
             sleep 5

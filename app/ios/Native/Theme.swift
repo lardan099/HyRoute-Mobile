@@ -2,15 +2,19 @@ import SwiftUI
 import UIKit
 
 enum HyStyle {
-  static let canvas = adaptive(light: 0xF3F5F3, dark: 0x111312)
-  static let surface = adaptive(light: 0xFAFAFA, dark: 0x171918)
-  static let inset = adaptive(light: 0xE8ECE9, dark: 0x222624)
-  static let stroke = adaptive(light: 0xD9DEDB, dark: 0x343937)
-  static let ink = adaptive(light: 0x1B1E1D, dark: 0xEEEFEE)
-  static let muted = adaptive(light: 0x515A55, dark: 0xA5ABA8)
-  static let accent = adaptive(light: 0x2D605D, dark: 0xA8CECA)
-  static let fill = adaptive(light: 0x1B1E1D, dark: 0xEEEFEE)
-  static let onFill = adaptive(light: 0xFAFAFA, dark: 0x171918)
+  static let canvas = adaptive(light: 0xF4F7FB, dark: 0x101723)
+  static let surface = adaptive(light: 0xFFFFFF, dark: 0x172131)
+  static let inset = adaptive(light: 0xE7EDF7, dark: 0x243149)
+  static let stroke = adaptive(light: 0xD6DFEB, dark: 0x34455F)
+  static let ink = adaptive(light: 0x18243B, dark: 0xEDF3FF)
+  static let muted = adaptive(light: 0x53637B, dark: 0xAFBED6)
+  static let accent = adaptive(light: 0x244FB1, dark: 0xAFC8FF)
+  static let fill = accent
+  static let onFill = adaptive(light: 0xFFFFFF, dark: 0x182D58)
+  static let connection = adaptive(light: 0x172B51, dark: 0x213557)
+  static let onConnection = Color.white
+  static let connectionDetail = Color(uiColor: rgb(0xCEDDFA))
+  static let connectionActive = Color(uiColor: rgb(0xA8E3CF))
   static let success = adaptive(light: 0x29604F, dark: 0x9DCCB8)
   static let failure = adaptive(light: 0xA12D38, dark: 0xFFA3AA)
 
@@ -47,9 +51,11 @@ struct HyButton: ButtonStyle {
     configuration.label
       .font(.body.weight(.semibold))
       .foregroundStyle(prominent ? HyStyle.onFill : HyStyle.ink)
-      .frame(maxWidth: .infinity, minHeight: 48)
+      .multilineTextAlignment(.center)
       .padding(.horizontal, 12)
-      .background(prominent ? HyStyle.fill : HyStyle.inset, in: RoundedRectangle(cornerRadius: 8))
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, minHeight: 48)
+      .background(prominent ? HyStyle.fill : HyStyle.inset, in: RoundedRectangle(cornerRadius: 12))
       .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.48)
   }
 }
@@ -74,7 +80,8 @@ struct HyRow: View {
     HStack(spacing: 12) {
       HyIcon(symbol: symbol)
       VStack(alignment: .leading, spacing: 3) {
-        Text(title).font(.body.weight(.semibold)).foregroundStyle(HyStyle.ink)
+        Text(title).font(.body.weight(.medium)).foregroundStyle(HyStyle.ink)
+          .fixedSize(horizontal: false, vertical: true)
         if let detail {
           Text(detail).font(.subheadline).foregroundStyle(HyStyle.muted)
             .fixedSize(horizontal: false, vertical: true)

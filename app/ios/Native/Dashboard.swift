@@ -6,6 +6,9 @@ struct Dashboard: View {
   @ObservedObject var measurements: SubscriptionMeasurements
   @State private var choosingProfile = false
   @State private var importing = false
+  @State private var destination: Destination?
+
+  private enum Destination: Hashable { case recovery, vpnJournal, trafficJournal }
 
   var body: some View {
     let selectedID = client.state.selected?.id
@@ -13,6 +16,7 @@ struct Dashboard: View {
       VStack(alignment: .leading, spacing: 18) {
         connectionSummary
         if !client.state.subscriptions.isEmpty {
+          HyHeading(text: "Серверы")
           LazyVStack(alignment: .leading, spacing: 10) {
             ForEach(client.state.subscriptions) { item in
               DashboardSubscription(client: client, measurements: measurements, item: item, selectedID: selectedID)
@@ -46,10 +50,14 @@ struct Dashboard: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .navigationBarLeading) {
-        NavigationLink {
-          DashboardSettings(client: client)
+        Menu {
+          Button { destination = .vpnJournal } label: { Label("Журнал VPN", systemImage: "list.bullet.rectangle") }
+            .accessibilityIdentifier("vpn-journal")
+          Button { destination = .trafficJournal } label: { Label("Журнал подключений", systemImage: "waveform.path") }
+            .accessibilityIdentifier("traffic-journal")
+          Button { destination = .recovery } label: { Label("Защита VPN", systemImage: "shield") }
         } label: {
-          Image(systemName: "gearshape").accessibilityLabel("Настройки")
+          Image(systemName: "ellipsis.circle").accessibilityLabel("Журналы и настройки VPN")
         }
         .accessibilityIdentifier("dashboard-settings")
       }
@@ -58,6 +66,16 @@ struct Dashboard: View {
           Image(systemName: "plus").accessibilityLabel("Добавить подписку")
         }
         .accessibilityIdentifier("dashboard-import")
+      }
+    }
+    .navigationDestination(isPresented: Binding(
+      get: { destination != nil }, set: { if !$0 { destination = nil } }
+    )) {
+      switch destination {
+      case .vpnJournal: VPNJournalPage(client: client)
+      case .trafficJournal: TrafficJournalPage(client: client)
+      case .recovery: VPNRecoveryPage(client: client)
+      case nil: EmptyView()
       }
     }
     .sheet(isPresented: $choosingProfile) { ProfilePicker(client: client) }
@@ -81,12 +99,12 @@ struct Dashboard: View {
 
   private var connectionSummary: some View {
     let active = client.vpnStatus.isActiveTunnel
-    let signal = active ? HyStyle.accent : HyStyle.muted
-    return VStack(alignment: .leading, spacing: 8) {
+    let signal = active ? HyStyle.connectionActive : HyStyle.connectionDetail
+    return VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 8) {
         if pending { ProgressView().tint(signal).accessibilityHidden(true) }
         else { Circle().fill(signal).frame(width: 8, height: 8).accessibilityHidden(true) }
-        Text(status).font(.subheadline)
+        Text(status).font(.subheadline.weight(.semibold))
           .foregroundStyle(signal)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("dashboard-vpn-status")
@@ -94,16 +112,17 @@ struct Dashboard: View {
       if let profile = client.state.selected {
         Button { choosingProfile = true } label: {
           HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text(profile.displayTitle).font(.title.weight(.semibold))
-                .tracking(-0.45)
-                .foregroundStyle(HyStyle.ink)
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Основной профиль").font(.footnote).foregroundStyle(HyStyle.connectionDetail)
+              Text(profile.displayTitle).font(.title2.weight(.semibold))
+                .tracking(-0.4)
+                .foregroundStyle(HyStyle.onConnection)
                 .fixedSize(horizontal: false, vertical: true)
-              Text(profile.transport).font(.footnote).foregroundStyle(HyStyle.muted)
+              Text(profile.transport).font(.footnote).foregroundStyle(HyStyle.connectionDetail)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.up.chevron.down").font(.subheadline.weight(.semibold))
-              .foregroundStyle(HyStyle.accent).accessibilityHidden(true)
+              .foregroundStyle(HyStyle.connectionDetail).accessibilityHidden(true)
           }
           .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
           .contentShape(Rectangle())
@@ -114,15 +133,22 @@ struct Dashboard: View {
         .accessibilityIdentifier("profilePicker")
       }
       if client.state.selected == nil && !active {
+        Text("Добавьте сервер для подключения").font(.title2.weight(.semibold))
+          .foregroundStyle(HyStyle.onConnection)
+          .fixedSize(horizontal: false, vertical: true)
         Button { importing = true } label: {
           Label("Добавить подписку", systemImage: "plus")
+            .font(.body.weight(.semibold)).foregroundStyle(HyStyle.onConnection)
+            .frame(minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(HyButton())
+        .buttonStyle(HyPress())
         .accessibilityIdentifier("dashboard-add-first-subscription")
       }
     }
-    .padding(.horizontal, 4)
-    .padding(.vertical, 6)
+    .padding(16)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(HyStyle.connection, in: RoundedRectangle(cornerRadius: 16))
   }
 }
 
@@ -138,20 +164,19 @@ private struct DashboardSubscription: View {
     let expanded = expansion ?? available.contains { $0.id == selectedID }
     let measuring = measurements.request?.subscriptionID == item.id
     return LazyVStack(alignment: .leading, spacing: 0) {
-      Divider().overlay(HyStyle.stroke)
-      HStack(spacing: 8) {
+      HStack(spacing: 4) {
         Button { expansion = !expanded } label: {
           HStack(spacing: 10) {
-            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-              .font(.caption.weight(.semibold)).frame(width: 15)
-              .foregroundStyle(HyStyle.muted).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
               Text(item.name).font(.headline).foregroundStyle(HyStyle.ink)
                 .fixedSize(horizontal: false, vertical: true)
               Text("Доступно \(available.count)").font(.caption).foregroundStyle(HyStyle.muted)
             }
             Spacer(minLength: 0)
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+              .font(.caption.weight(.semibold)).foregroundStyle(HyStyle.muted).accessibilityHidden(true)
           }
+          .padding(.leading, 14)
           .frame(minHeight: 46).contentShape(Rectangle())
         }
         .buttonStyle(HyPress())
@@ -159,9 +184,12 @@ private struct DashboardSubscription: View {
         .accessibilityValue(expanded ? "Развёрнута" : "Свёрнута")
         if item.canRefresh == true {
           Button { Task { await client.refresh(item.id) } } label: {
-            Image(systemName: "arrow.clockwise").font(.subheadline.weight(.semibold))
-              .foregroundStyle(HyStyle.accent).frame(width: 44, height: 44)
-              .contentShape(Rectangle())
+            Group {
+              if client.refreshingSubscription == item.id { ProgressView() }
+              else { Image(systemName: "arrow.clockwise").font(.subheadline.weight(.semibold)) }
+            }
+            .foregroundStyle(HyStyle.accent).frame(width: 44, height: 44)
+            .contentShape(Rectangle())
           }
           .buttonStyle(HyPress())
           .disabled(client.busy || measuring)
@@ -184,6 +212,12 @@ private struct DashboardSubscription: View {
         .accessibilityIdentifier("dashboard-probe-\(item.id)")
       }
       .padding(.vertical, 5)
+      if client.refreshFailed(item) {
+        Text("Обновление не удалось. Список сохранён.")
+          .font(.footnote).foregroundStyle(HyStyle.failure)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.horizontal, 14).padding(.bottom, 8)
+      }
       if expanded {
         Divider().overlay(HyStyle.stroke)
         if measuring {
@@ -220,6 +254,7 @@ private struct DashboardSubscription: View {
         .padding(.horizontal, 15)
       }
     }
+    .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 14))
   }
 
   private func profileRow(_ profile: VPNProfile) -> some View {
@@ -232,16 +267,16 @@ private struct DashboardSubscription: View {
           Text(profile.displayTitle).font(.body.weight(selected ? .medium : .regular))
             .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)
           Text(profile.transport).font(.footnote).foregroundStyle(HyStyle.muted)
+          if let delay {
+            Text(delay).font(.footnote.monospacedDigit())
+              .foregroundStyle(rows.contains { $0.ms != nil } ? HyStyle.success : HyStyle.muted)
+              .accessibilityHidden(true)
+          }
         }
         .layoutPriority(1)
         Spacer(minLength: 2)
-        if let delay {
-          Text(delay).font(.footnote.monospacedDigit())
-            .foregroundStyle(rows.contains { $0.ms != nil } ? HyStyle.success : HyStyle.muted)
-            .accessibilityHidden(true)
-        }
         if selected {
-          Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
+          Image(systemName: "checkmark").font(.footnote.weight(.semibold)).foregroundStyle(HyStyle.accent)
             .accessibilityHidden(true)
         }
       }
@@ -254,44 +289,5 @@ private struct DashboardSubscription: View {
     .accessibilityAddTraits(selected ? .isSelected : [])
     .accessibilityIdentifier("dashboard-profile-\(profile.id)")
     .accessibilityValue(delay ?? "")
-  }
-}
-
-private struct DashboardSettings: View {
-  @ObservedObject var client: Client
-
-  var body: some View {
-    List {
-      Section("Подключение") {
-        NavigationLink {
-          VPNRecoveryPage(client: client)
-        } label: {
-          HyRow(title: "Защита VPN", symbol: "shield",
-                detail: client.autoReconnect ? "Автовосстановление включено" : "Автовосстановление выключено",
-                disclosure: false)
-        }
-      }
-      .listRowBackground(HyStyle.surface)
-      Section("Диагностика") {
-        NavigationLink {
-          VPNJournalPage(client: client)
-        } label: {
-          HyRow(title: "Журнал VPN", symbol: "list.bullet.rectangle",
-                detail: "Запуски, остановки и сбои туннеля", disclosure: false)
-        }
-        .accessibilityIdentifier("vpn-journal")
-        NavigationLink {
-          TrafficJournalPage(client: client)
-        } label: {
-          HyRow(title: "Журнал подключений", symbol: "waveform.path",
-                detail: "Адреса, маршруты и ошибки", disclosure: false)
-        }
-        .accessibilityIdentifier("traffic-journal")
-      }
-      .listRowBackground(HyStyle.surface)
-    }
-    .hyList()
-    .navigationTitle("Настройки")
-    .navigationBarTitleDisplayMode(.inline)
   }
 }

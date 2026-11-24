@@ -245,6 +245,8 @@ final class Client: ObservableObject, VPNCommandTarget {
   @Published private(set) var autoReconnect = UserDefaults.standard.bool(forKey: "vpnAutoReconnect")
   @Published private(set) var blockOnDrop = UserDefaults.standard.bool(forKey: "vpnBlockOnDrop")
   @Published var error: String?
+  @Published private(set) var refreshingSubscription: String?
+  @Published private var refreshErrors: Set<String> = []
 
   func load() async {
     if await change("Не удалось открыть хранилище HyRoute.", {
@@ -733,6 +735,10 @@ final class Client: ObservableObject, VPNCommandTarget {
   }
 
   func loadLayoutPreview() -> Bool {
+    if ProcessInfo.processInfo.environment["HYROUTE_LAYOUT_PREVIEW"] == "empty" {
+      ready = true
+      return true
+    }
     let fixture = """
     {
       "subscriptions": [{"id":"preview","title":"Серверы","canRefresh":true,"refreshedAt":1795400000,
@@ -808,14 +814,19 @@ final class Client: ObservableObject, VPNCommandTarget {
     await applySettingsChange(updated)
   }
 
+  func refreshFailed(_ item: Subscription) -> Bool {
+    refreshErrors.contains(item.id) || item.refreshFailed == true
+  }
+
   func refresh(_ id: String) async {
-    let failure = "Не удалось обновить подписку. Сохранён предыдущий список."
-    let updated = await change(failure) {
+    guard !busy else { return }
+    refreshingSubscription = id
+    refreshErrors.remove(id)
+    defer { refreshingSubscription = nil }
+    let updated = await change("", reportError: false) {
       try await self.core.refresh(id)
     }
-    if updated && state.subscriptions.first(where: { $0.id == id })?.refreshFailed == true {
-      error = failure
-    }
+    if !updated { refreshErrors.insert(id) }
   }
 
   func select(_ id: String, reportError: Bool = true) async -> Bool {

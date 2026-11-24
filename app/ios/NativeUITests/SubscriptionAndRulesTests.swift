@@ -93,7 +93,7 @@ final class SubscriptionAndRulesTests: XCTestCase {
   func testOpensTrafficJournalFromHome() {
     let app = launch()
     tap(app.buttons["dashboard-settings"])
-    tap(app.buttons["traffic-journal"])
+    tap(app.buttons["Журнал подключений"])
     XCTAssertTrue(app.navigationBars["Журнал подключений"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.switches["trafficLogging"].exists)
     XCTAssertTrue(app.buttons["traffic-only-errors"].exists)
@@ -102,7 +102,7 @@ final class SubscriptionAndRulesTests: XCTestCase {
   func testTrafficFilterAndClearRequireConfirmation() {
     let app = launch(traffic: true)
     tap(app.buttons["dashboard-settings"])
-    tap(app.buttons["traffic-journal"])
+    tap(app.buttons["Журнал подключений"])
     let good = app.staticTexts["www.example.test"]
     let failed = app.staticTexts["api.example.test"]
     XCTAssertTrue(good.waitForExistence(timeout: 10))
@@ -300,6 +300,14 @@ final class SubscriptionAndRulesTests: XCTestCase {
     let result = app.staticTexts["subscription-result-fi"]
     XCTAssertTrue(result.waitForExistence(timeout: 10))
     XCTAssertEqual(result.label, "42 мс")
+  }
+
+  func testEmptyHomeOffersImportWithoutShowingConnect() {
+    let app = launch(screen: "empty")
+    XCTAssertTrue(app.staticTexts["dashboard-vpn-status"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["dashboard-vpn-button"].exists)
+    tap(app.buttons["dashboard-add-first-subscription"])
+    XCTAssertTrue(app.textViews["import-input"].waitForExistence(timeout: 10))
   }
 
   func testInvalidImportKeepsInputAndShowsErrorNextToSubmit() {
