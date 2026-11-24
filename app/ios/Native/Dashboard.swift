@@ -29,6 +29,7 @@ struct Dashboard: View {
       .padding(.horizontal, 18)
       .padding(.vertical, 12)
     }
+    .accessibilityIdentifier("dashboard-scroll")
     .hyScreen()
     .navigationTitle("HyRoute")
     .navigationBarTitleDisplayMode(.inline)

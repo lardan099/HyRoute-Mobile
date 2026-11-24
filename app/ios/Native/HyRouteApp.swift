@@ -100,36 +100,35 @@ private struct RootView: View {
   var body: some View {
     Group {
       if client.ready {
-        ZStack {
-          panel(.home) {
-            if previewScreen == "vpn-log" { VPNJournalPage(client: client) }
-            else if previewScreen == "traffic" { TrafficJournalPage(client: client) }
-            else { Dashboard(client: client, measurements: measurements) }
-          }
-          panel(.subscriptions) {
-            if previewScreen == "servers", let id = client.state.subscriptions.first?.id {
-              SubscriptionPage(client: client, id: id, measurements: measurements)
-            } else {
-              SubscriptionsPage(client: client, measurements: measurements)
+        VStack(spacing: 0) {
+          ZStack {
+            panel(.home) {
+              if previewScreen == "vpn-log" { VPNJournalPage(client: client) }
+              else if previewScreen == "traffic" { TrafficJournalPage(client: client) }
+              else { Dashboard(client: client, measurements: measurements) }
             }
-          }
-          panel(.rules) { RulesPage(client: client, preview: previewScreen) }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-          if !keyboardVisible {
-            VStack(spacing: 0) {
-              if client.canApplyVPNChanges || client.restartingVPN {
-                ViewThatFits(in: .horizontal) {
-                  HStack { Text("Настройки изменились"); Spacer(); reconnectButton }
-                  VStack(alignment: .leading, spacing: 8) { Text("Настройки изменились"); reconnectButton }
-                }
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16).padding(.vertical, 8)
-                .background(HyStyle.canvas)
+            panel(.subscriptions) {
+              if previewScreen == "servers", let id = client.state.subscriptions.first?.id {
+                SubscriptionPage(client: client, id: id, measurements: measurements)
+              } else {
+                SubscriptionsPage(client: client, measurements: measurements)
               }
-              tabBar
             }
+            panel(.rules) { RulesPage(client: client, preview: previewScreen) }
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          if !keyboardVisible {
+            if client.canApplyVPNChanges || client.restartingVPN {
+              ViewThatFits(in: .horizontal) {
+                HStack { Text("Настройки изменились"); Spacer(); reconnectButton }
+                VStack(alignment: .leading, spacing: 8) { Text("Настройки изменились"); reconnectButton }
+              }
+              .font(.subheadline)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.horizontal, 16).padding(.vertical, 8)
+              .background(HyStyle.canvas)
+            }
+            tabBar
           }
         }
       } else if client.busy {

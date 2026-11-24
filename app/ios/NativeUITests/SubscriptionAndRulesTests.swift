@@ -1,5 +1,18 @@
 import XCTest
 
+private func revealDashboardDetails(_ button: XCUIElement, in app: XCUIApplication) {
+  let home = app.scrollViews["dashboard-scroll"]
+  XCTAssertTrue(home.waitForExistence(timeout: 10))
+  let navigation = app.buttons["tab-home"]
+  XCTAssertLessThanOrEqual(home.frame.maxY, navigation.frame.minY)
+  for _ in 0..<7 {
+    if button.isHittable && button.frame.maxY <= home.frame.maxY { return }
+    home.swipeUp()
+  }
+  XCTAssertTrue(button.isHittable)
+  XCTAssertLessThanOrEqual(button.frame.maxY, home.frame.maxY)
+}
+
 final class SubscriptionAndRulesTests: XCTestCase {
   private func launch(screen: String = "home", slowProbe: Bool = false, traffic: Bool = false) -> XCUIApplication {
     continueAfterFailure = false
@@ -257,7 +270,9 @@ final class SubscriptionAndRulesTests: XCTestCase {
 
   func testOpensSubscriptionFromHomeAndReturnsToOpenList() {
     let app = launch(screen: "routes-test")
-    tap(app.buttons["dashboard-server-details-demo"])
+    let servers = app.buttons["dashboard-server-details-demo"]
+    revealDashboardDetails(servers, in: app)
+    tap(servers)
     let details = app.navigationBars["Тестовая подписка"]
     XCTAssertTrue(details.waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["subscription-check-all"].isHittable)
@@ -275,8 +290,9 @@ final class SubscriptionAndRulesTests: XCTestCase {
     XCTAssertEqual(XCTWaiter.wait(for: [measured], timeout: 10), .completed)
     XCTAssertTrue(app.navigationBars["HyRoute"].exists)
     let details = app.buttons["dashboard-server-details-preview"]
-    for _ in 0..<4 where !details.isHittable { app.scrollViews.firstMatch.swipeUp() }
+    revealDashboardDetails(details, in: app)
     tap(details)
+    XCTAssertTrue(app.navigationBars["Серверы"].waitForExistence(timeout: 10))
     let result = app.staticTexts["subscription-result-fi"]
     XCTAssertTrue(result.waitForExistence(timeout: 10))
     XCTAssertEqual(result.label, "42 мс")
@@ -402,7 +418,7 @@ final class CompactLayoutTests: XCTestCase {
     XCTAssertGreaterThan(status.frame.height, 24, "Expected accessibility content size")
     XCTAssertTrue(app.buttons["dashboard-vpn-button"].isHittable)
     let details = app.buttons["dashboard-server-details-preview"]
-    for _ in 0..<5 where !details.isHittable { app.scrollViews.firstMatch.swipeUp() }
+    revealDashboardDetails(details, in: app)
     XCTAssertTrue(details.isHittable)
     details.tap()
     XCTAssertTrue(app.buttons["subscription-check-all"].waitForExistence(timeout: 10))
