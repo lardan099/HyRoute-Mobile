@@ -31,13 +31,22 @@ struct Dashboard: View {
     }
     .accessibilityIdentifier("dashboard-scroll")
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      if client.state.selected != nil || client.vpnStatus.isActiveTunnel {
-        Button { Task { await client.toggleVPN() } } label: {
-          Label(client.vpnStatus.isActiveTunnel ? "Отключить VPN" : "Подключить VPN", systemImage: "power")
+      if client.state.selected != nil || client.vpnStatus.isActiveTunnel || client.vpnFailure != nil {
+        VStack(alignment: .leading, spacing: 8) {
+          if let message = client.vpnFailure {
+            Text(message).font(.subheadline).foregroundStyle(HyStyle.failure)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("dashboard-vpn-error")
+          }
+          if client.state.selected != nil || client.vpnStatus.isActiveTunnel {
+            Button { Task { await client.toggleVPN() } } label: {
+              Label(client.vpnStatus.isActiveTunnel ? "Отключить VPN" : "Подключить VPN", systemImage: "power")
+            }
+            .buttonStyle(HyButton(prominent: !client.vpnStatus.isActiveTunnel))
+            .disabled(client.vpnBusy || client.vpnStatus == .disconnecting || client.restartingVPN)
+            .accessibilityIdentifier("dashboard-vpn-button")
+          }
         }
-        .buttonStyle(HyButton(prominent: !client.vpnStatus.isActiveTunnel))
-        .disabled(client.vpnBusy || client.vpnStatus == .disconnecting)
-        .accessibilityIdentifier("dashboard-vpn-button")
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
         .frame(maxWidth: 676)

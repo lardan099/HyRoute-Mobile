@@ -128,6 +128,19 @@ private struct RootView: View {
               .padding(.horizontal, 16).padding(.vertical, 8)
               .background(HyStyle.canvas)
             }
+            if tab != .home, let message = client.vpnFailure {
+              HStack(alignment: .top, spacing: 8) {
+                Text(message).font(.subheadline).foregroundStyle(HyStyle.failure)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                Button { client.vpnFailure = nil } label: {
+                  Image(systemName: "xmark").frame(width: 44, height: 44)
+                    .accessibilityLabel("Закрыть сообщение")
+                }
+              }
+              .padding(.horizontal, 16).padding(.vertical, 8)
+              .background(HyStyle.canvas)
+            }
             tabBar
           }
         }

@@ -245,6 +245,7 @@ final class Client: ObservableObject, VPNCommandTarget {
   @Published private(set) var autoReconnect = UserDefaults.standard.bool(forKey: "vpnAutoReconnect")
   @Published private(set) var blockOnDrop = UserDefaults.standard.bool(forKey: "vpnBlockOnDrop")
   @Published var error: String?
+  @Published var vpnFailure: String?
   @Published private(set) var refreshingSubscription: String?
   @Published private var refreshErrors: Set<String> = []
 
@@ -262,6 +263,7 @@ final class Client: ObservableObject, VPNCommandTarget {
 
   func toggleVPN() async {
     guard !runningCommand, !restartingVPN, !vpnBusy, !stoppingVPN else { return }
+    vpnFailure = nil
     if vpnStatus.isActiveTunnel { await stopVPN() }
     else { await startVPN() }
   }
@@ -274,11 +276,11 @@ final class Client: ObservableObject, VPNCommandTarget {
     guard canApplyVPNChanges, !runningCommand, !restartingVPN, !vpnBusy, !stoppingVPN else { return }
     restartingVPN = true
     defer { restartingVPN = false }
-    error = nil
+    vpnFailure = nil
     await stopVPN()
-    guard error == nil else { return }
+    guard vpnFailure == nil else { return }
     do { try await waitForCommandStatus(connected: false) }
-    catch { self.error = error.localizedDescription; return }
+    catch { vpnFailure = error.localizedDescription; return }
     await startVPN()
   }
 
@@ -293,7 +295,7 @@ final class Client: ObservableObject, VPNCommandTarget {
       if manager?.isOnDemandEnabled == true { try await disarmRecovery() }
     } catch {
       stoppingVPN = false
-      self.error = "Не удалось отключить автовосстановление VPN. Повторите попытку."
+      vpnFailure = "Не удалось отключить автовосстановление VPN. Повторите попытку."
       return
     }
     if active {
@@ -321,6 +323,7 @@ final class Client: ObservableObject, VPNCommandTarget {
     runningCommand = true
     defer { runningCommand = false }
     error = nil
+    vpnFailure = nil
     if !ready { await load() }
     guard ready else { throw ClientMessage(text: error ?? "Не удалось открыть хранилище HyRoute.") }
     if !stoppingVPN && startup == nil {
@@ -335,12 +338,12 @@ final class Client: ObservableObject, VPNCommandTarget {
   func startForCommand() async throws {
     guard state.selected != nil else { throw ClientMessage(text: "Добавьте подписку и выберите сервер в HyRoute.") }
     await startVPN()
-    if let error { throw ClientMessage(text: error) }
+    if let vpnFailure { throw ClientMessage(text: vpnFailure) }
   }
 
   func stopForCommand() async throws {
     await stopVPN()
-    if let error { throw ClientMessage(text: error) }
+    if let vpnFailure { throw ClientMessage(text: vpnFailure) }
   }
 
   func selectForCommand(_ id: String) async throws {
@@ -359,7 +362,7 @@ final class Client: ObservableObject, VPNCommandTarget {
       syncVPNStatus()
       if connected {
         if vpnStatus == .connected { return }
-        if startupReport == nil && !vpnBusy, let error { throw ClientMessage(text: error) }
+        if startupReport == nil && !vpnBusy, let vpnFailure { throw ClientMessage(text: vpnFailure) }
       } else if vpnStatus == .disconnected || vpnStatus == .invalid {
         return
       }
@@ -379,7 +382,7 @@ final class Client: ObservableObject, VPNCommandTarget {
         await core.recordVPNError("vpn_geo_local_error", source: "HyRoute", code: Int32(TunnelStartError.geodata.rawValue))
         let shown = unavailableGeo.prefix(4).joined(separator: ", ")
         let extra = unavailableGeo.count > 4 ? " и ещё \(unavailableGeo.count - 4)" : ""
-        error = "Недоступны категории \(shown)\(extra). В «Правилах» откройте «Настройки», затем «Базы правил». Обновите базы или выберите доступные категории."
+        vpnFailure = "Недоступны категории \(shown)\(extra). В «Правилах» откройте «Настройки», затем «Базы правил». Обновите базы или выберите доступные категории."
         return
       }
       do {
@@ -393,12 +396,12 @@ final class Client: ObservableObject, VPNCommandTarget {
       await core.record("vpn_handoff")
     } catch CoreError.missingTunnelExtension {
       await core.record("vpn_provider_missing")
-      error = "В установленной сборке нет Packet Tunnel. При подписи IPA сохраните VPN-расширение."
+      vpnFailure = "В установленной сборке нет Packet Tunnel. При подписи IPA сохраните VPN-расширение."
     } catch let message as ClientMessage {
-      error = message.text
+      vpnFailure = message.text
     } catch {
       await logVPNError(error, event: "vpn_system_error")
-      self.error = "iOS отклонила запуск VPN. Код \((error as NSError).code). Подробности в журнале."
+      self.vpnFailure = "iOS отклонила запуск VPN. Код \((error as NSError).code). Подробности в журнале."
       syncVPNStatus()
     }
   }
@@ -648,7 +651,7 @@ final class Client: ObservableObject, VPNCommandTarget {
       } else if outcome == .timedOut {
         stoppingVPN = true
         connection.stopVPNTunnel()
-        error = "VPN не запустился за 35 секунд."
+        vpnFailure = "VPN не запустился за 35 секунд."
         Task { await core.record("vpn_start_timeout") }
       }
     } else if status == .disconnected || status == .invalid {
@@ -665,6 +668,7 @@ final class Client: ObservableObject, VPNCommandTarget {
     } else if status == .connected && vpnStatus != .connected && trafficLogging {
       Task { try? await updateTraffic(TrafficCommand(action: .trafficSet, enabled: true)) }
     }
+    if status == .connected && vpnStatus != .connected { vpnFailure = nil }
     vpnStatus = stoppingVPN ? .disconnecting : status
   }
 
@@ -688,7 +692,7 @@ final class Client: ObservableObject, VPNCommandTarget {
   }
 
   private func reportDisconnect(_ connection: NEVPNConnection, event: String, message: String) {
-    error = message
+    vpnFailure = message
     let attempt = attemptID
     if event == "vpn_start_failed" { startupReport = attempt }
     Task { [weak self] in
@@ -706,7 +710,7 @@ final class Client: ObservableObject, VPNCommandTarget {
            detail.domain == NEVPNConnectionErrorDomain,
            NEVPNConnectionError(rawValue: detail.code) == .pluginFailed {
           self.mayRetryExtension = false
-          self.error = nil
+          self.vpnFailure = nil
           self.vpnBusy = true
           defer { self.vpnBusy = false }
           await self.core.record("vpn_extension_retry")
@@ -715,12 +719,12 @@ final class Client: ObservableObject, VPNCommandTarget {
         }
         if detail.domain == TunnelStartError.errorDomain,
            let tunnelError = TunnelStartError(rawValue: detail.code) {
-          self.error = tunnelError.userMessage
+          self.vpnFailure = tunnelError.userMessage
         } else if detail.domain == NEVPNConnectionErrorDomain,
                   NEVPNConnectionError(rawValue: detail.code) == .pluginFailed {
-          self.error = "iOS не смогла запустить VPN-расширение (код \(detail.code))."
+          self.vpnFailure = "iOS не смогла запустить VPN-расширение (код \(detail.code))."
         } else {
-          self.error = message + " Код \(detail.code)."
+          self.vpnFailure = message + " Код \(detail.code)."
         }
       }
     }

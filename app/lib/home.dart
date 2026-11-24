@@ -8,6 +8,7 @@ import 'diagnostics.dart';
 import 'editors.dart';
 import 'network_tools.dart';
 import 'routing_tools.dart';
+import 'theme.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key, required this.core});
@@ -46,12 +47,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var _vpnStatus = 'off';
   var _changingVpn = false;
   var _pendingReconnect = false;
+  String? _reconnectError;
+  final _expandedSubscriptionCards = <String>{};
   final _expandedSubscriptions = <String, bool>{};
   final _sortLatency = <String>{};
   final _latencies = <String, List<Map<String, dynamic>>>{};
   final _expandedProbeGroups = <String>{};
   ({String subscription, String? server})? _inlineProbe;
   String? _probeError;
+  String? _refreshingSubscription;
+  final _refreshErrors = <String, String>{};
   var _cancelInlineProbe = false;
 
   VPNControl? get _vpn {
@@ -85,6 +90,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final previous = {..._latencies};
     setState(() {
       _expandedSubscriptions[subscription.id] = true;
+      _expandedSubscriptionCards.add(subscription.id);
       _inlineProbe = target;
       if (server != null && server.balance) _expandedProbeGroups.add(server.id);
       _cancelInlineProbe = false;
@@ -218,7 +224,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       if (mounted && status != _vpnStatus) {
         setState(() {
           _vpnStatus = status;
-          if (status == 'off' && !_changingVpn) _pendingReconnect = false;
+          if (status == 'off' && !_changingVpn) {
+            _pendingReconnect = false;
+            _reconnectError = null;
+          }
         });
       }
     } on PlatformException {
@@ -231,7 +240,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Future<void> _toggleVPN() async {
     final vpn = _vpn;
     if (vpn == null || _changingVpn) return;
-    setState(() => _changingVpn = true);
+    setState(() {
+      _changingVpn = true;
+      _reconnectError = null;
+    });
     try {
       if (_vpnStatus == 'on' || _vpnStatus == 'starting') {
         await vpn.stopVpn();
@@ -250,7 +262,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Future<void> _reconnect() async {
     final vpn = _vpn;
     if (vpn == null || _changingVpn) return;
-    setState(() => _changingVpn = true);
+    setState(() {
+      _changingVpn = true;
+      _reconnectError = null;
+    });
     try {
       await vpn.stopVpn();
       for (var attempt = 0; attempt < 30; attempt++) {
@@ -262,9 +277,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         }
         await Future<void>.delayed(const Duration(milliseconds: 150));
       }
-      if (mounted) _notify('Android ещё останавливает VPN.');
+      if (mounted) {
+        setState(() => _reconnectError = 'Android ещё останавливает VPN.');
+      }
     } on PlatformException {
-      if (mounted) _notify('Не удалось переподключиться. Откройте журнал VPN.');
+      if (mounted) {
+        setState(() => _reconnectError = 'Не удалось переподключиться.');
+      }
     } finally {
       if (mounted) {
         await _readVPNStatus();
@@ -418,24 +437,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   Future<void> _refresh(String id) async {
+    if (_importing || _validating) return;
+    setState(() {
+      _refreshingSubscription = id;
+      _refreshErrors.remove(id);
+    });
     final error = await _updateSubscriptions(
       () => widget.core.refreshSubscription(id),
       refresh: true,
     );
-    if (mounted) {
-      final failed =
-          _subscriptions
-              .where((item) => item.id == id)
-              .firstOrNull
-              ?.refreshFailed ==
-          true;
-      _notify(
-        error ??
-            (failed
-                ? 'Подписку не удалось обновить. Сохранён предыдущий список.'
-                : 'Подписка обновлена.'),
-      );
-    }
+    if (!mounted) return;
+    setState(() {
+      _refreshingSubscription = null;
+      if (error != null) _refreshErrors[id] = error;
+    });
   }
 
   Future<String?> _saveSettings({
@@ -606,13 +621,18 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   Future<void> _editChain() async {
-    final edit = await showDialog<(String, String)>(
+    await showDialog<void>(
       context: context,
-      builder: (_) =>
-          ChainEditor(servers: _chainServers, entries: _servers, via: _via),
+      builder: (_) => ChainEditor(
+        servers: _chainServers,
+        entries: _servers,
+        via: _via,
+        save: _saveChain,
+      ),
     );
-    if (!mounted || edit == null) return;
-    final (exit, entry) = edit;
+  }
+
+  Future<String?> _saveChain(String exit, String entry) async {
     final next = {..._via};
     if (entry.isEmpty) {
       next.remove(exit);
@@ -622,13 +642,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       String? id = entry;
       while (id != null) {
         if (!seen.add(id)) {
-          _notify('Профили в цепочке образуют цикл.');
-          return;
+          return 'Профили в цепочке образуют цикл.';
         }
         id = next[id];
       }
     }
-    await _saveSettings(via: next);
+    return _saveSettings(via: next, inline: true);
   }
 
   Future<void> _editScope() async {
@@ -652,6 +671,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final hasTunnel = _vpnStatus == 'on' || _vpnStatus == 'starting';
+    final canAdd =
+        (_tab == 0 && _selected != null) ||
+        (_tab == 1 && _subscriptions.isNotEmpty);
     return Scaffold(
       appBar: AppBar(
         centerTitle: false,
@@ -659,19 +684,43 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           _tab == 0
               ? 'HyRoute'
               : _tab == 1
-              ? 'Серверы'
-              : 'Маршрутизация',
+              ? 'Подписки'
+              : 'Правила',
           style: Theme.of(context).textTheme.titleLarge,
         ),
         actions: [
           if (_tab == 0 &&
               (_diagnostics != null || widget.core is VPNSystemSettings))
-            IconButton(
+            PopupMenuButton<String>(
               tooltip: 'Настройки VPN',
-              onPressed: _openVpnControls,
-              icon: const Icon(Icons.settings_outlined),
+              icon: const Icon(Icons.more_horiz_rounded),
+              onSelected: (item) {
+                if (item == 'journal') {
+                  _openVPNJournal();
+                } else {
+                  _openSystemVPNSettings();
+                }
+              },
+              itemBuilder: (_) => [
+                if (_diagnostics != null)
+                  const PopupMenuItem(
+                    value: 'journal',
+                    child: Text('Журнал VPN'),
+                  ),
+                if (widget.core is VPNSystemSettings)
+                  const PopupMenuItem(
+                    value: 'system',
+                    child: Text('Защита VPN'),
+                  ),
+              ],
             ),
-          if (_tab == 0 && !_loading && !_storageFailed)
+          if (widget.core case final ServerGroupControl control when _tab == 1)
+            IconButton(
+              tooltip: 'Управление группами',
+              onPressed: () => _openServerGroups(control),
+              icon: const Icon(Icons.dns_outlined),
+            ),
+          if (canAdd && !_loading && !_storageFailed)
             IconButton(
               tooltip: 'Добавить подписку',
               onPressed: _importing || _validating ? null : _import,
@@ -707,6 +756,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 Expanded(
                   child: ListView(
                     key: PageStorageKey((_tab, _tab == 2 && _routingSettings)),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
                     padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
                     children: switch ((_loading, _storageFailed, _tab)) {
                       (true, _, _) => const [
@@ -737,36 +788,40 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           ),
         ),
       ),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_vpn != null &&
-              ((_tab == 0 && _selected != null) ||
-                  (_pendingReconnect && _vpnStatus == 'on')))
-            _connectionActions(),
-          NavigationBar(
-            selectedIndex: _tab,
-            onDestinationSelected: (tab) => setState(() => _tab = tab),
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.power_settings_new_outlined),
-                selectedIcon: Icon(Icons.power_settings_new_rounded),
-                label: 'Главная',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.layers_outlined),
-                selectedIcon: Icon(Icons.layers_rounded),
-                label: 'Подписки',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.alt_route_outlined),
-                selectedIcon: Icon(Icons.alt_route_rounded),
-                label: 'Правила',
-              ),
-            ],
-          ),
-        ],
-      ),
+      bottomNavigationBar: keyboardVisible
+          ? null
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_vpn != null &&
+                    ((_tab == 0 && (_selected != null || hasTunnel)) ||
+                        (_pendingReconnect && _vpnStatus == 'on')))
+                  _connectionActions(),
+                NavigationBar(
+                  height:
+                      60 + (textScaler.scale(12) - 12).clamp(0, 22).toDouble(),
+                  selectedIndex: _tab,
+                  onDestinationSelected: (tab) => setState(() => _tab = tab),
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(Icons.power_settings_new_outlined),
+                      selectedIcon: Icon(Icons.power_settings_new_rounded),
+                      label: 'Главная',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.layers_outlined),
+                      selectedIcon: Icon(Icons.layers_rounded),
+                      label: 'Подписки',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.alt_route_outlined),
+                      selectedIcon: Icon(Icons.alt_route_rounded),
+                      label: 'Правила',
+                    ),
+                  ],
+                ),
+              ],
+            ),
     );
   }
 
@@ -775,62 +830,84 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         .where((server) => server.id == _selected)
         .firstOrNull;
     final theme = Theme.of(context);
-    final colors = theme.colorScheme;
     final connected = _vpnStatus == 'on';
-    final signal = connected ? colors.primary : colors.onSurfaceVariant;
+    final signal = connected ? connectionActive : connectionDetail;
+    final panel = theme.brightness == Brightness.dark
+        ? connectionPanelDark
+        : connectionPanelLight;
     return [
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.circle, size: 8, color: signal),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _vpnTitle,
-                    style: theme.textTheme.bodyMedium?.copyWith(color: signal),
+      Material(
+        borderRadius: BorderRadius.circular(16),
+        color: panel,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.circle, size: 8, color: signal),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _vpnTitle,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: signal,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (selected == null) ...[
+                Text(
+                  'Добавьте сервер для подключения',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: Colors.white,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            if (selected == null)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Добавить подписку'),
-                subtitle: const Text('Ссылка или конфиг сервера'),
-                trailing: const Icon(Icons.add_rounded),
-                onTap: _importing || _validating ? null : _import,
-              )
-            else
-              ListTile(
-                key: const ValueKey('primary-profile'),
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  selected.name,
-                  style: theme.textTheme.headlineSmall,
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: Colors.white),
+                    onPressed: _importing || _validating ? null : _import,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Добавить подписку'),
+                  ),
                 ),
-                subtitle: Text(
-                  selected.protocol,
-                  style: theme.textTheme.bodySmall,
+              ] else
+                ListTile(
+                  key: const ValueKey('primary-profile'),
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    selected.name,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                    ),
+                  ),
+                  subtitle: Text(
+                    selected.protocol,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: connectionDetail,
+                    ),
+                  ),
+                  trailing: const Icon(
+                    Icons.unfold_more_rounded,
+                    color: connectionDetail,
+                    semanticLabel: 'Сменить сервер',
+                  ),
+                  onTap: _importing || _validating ? null : _chooseProfile,
                 ),
-                trailing: const Icon(
-                  Icons.unfold_more_rounded,
-                  semanticLabel: 'Сменить сервер',
-                ),
-                onTap: _importing || _validating ? null : _chooseProfile,
-              ),
-          ],
+            ],
+          ),
         ),
       ),
       if (_subscriptions.isNotEmpty) ...[
-        for (final item in _subscriptions) ...[
-          const Divider(height: 1),
-          _homeSubscription(context, item),
-        ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(2, 20, 2, 8),
+          child: Text('Серверы', style: theme.textTheme.titleLarge),
+        ),
+        for (final item in _subscriptions) _homeSubscription(context, item),
       ],
     ];
   }
@@ -849,6 +926,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final expanded =
         _expandedSubscriptions[item.id] ??
         servers.any((server) => server.id == _selected);
+    final measuring = _inlineProbe?.subscription == item.id;
     final probing = _inlineProbe == (subscription: item.id, server: null);
     final canMeasure = _diagnostics != null && servers.isNotEmpty;
     final hasLatency = servers.any((server) => _latency(server.id) != null);
@@ -866,8 +944,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         return a.compareTo(b);
       });
     }
-    return Material(
-      color: Colors.transparent,
+    return Card(
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -877,8 +955,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 child: ListTile(
                   key: ValueKey('home-subscription-${item.id}'),
                   contentPadding: const EdgeInsets.only(left: 12),
-                  leading: Icon(
-                    expanded ? Icons.expand_more : Icons.chevron_right,
+                  trailing: Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
                     size: 20,
                   ),
                   title: Text(
@@ -895,7 +973,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 IconButton(
                   tooltip: 'Обновить подписку',
                   icon: const Icon(Icons.refresh_rounded),
-                  onPressed: _importing || _validating || probing
+                  onPressed: _importing || _validating || measuring
                       ? null
                       : () => _refresh(item.id),
                 ),
@@ -923,18 +1001,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 ),
             ],
           ),
+          if (measuring || _refreshingSubscription == item.id)
+            const LinearProgressIndicator(),
+          if (_refreshError(item) case final String message)
+            _inlineError(message),
           if (expanded) ...[
             const Divider(height: 1),
-            if (probing) const LinearProgressIndicator(),
             if (_probeError == item.id)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-                child: Text(
-                  'Не удалось измерить задержку',
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            SubscriptionDetails(subscription: item, compact: true),
+              _inlineError('Не удалось измерить задержку'),
+            SubscriptionDetails(
+              subscription: item,
+              compact: true,
+              showRefreshFailure: false,
+            ),
             if (hasLatency)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -980,31 +1059,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       selected: selected,
       selectedTileColor: colors.primary.withValues(alpha: 0.08),
       title: Text(server.name),
-      subtitle: Text(server.protocol),
-      trailing: delay == null && !selected
+      subtitle: Text(
+        [server.protocol, ?delay].join(' · '),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+      trailing: !selected
           ? null
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (delay != null)
-                  Text(
-                    delay,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                      color: ms == null
-                          ? colors.onSurfaceVariant
-                          : colors.primary,
-                    ),
-                  ),
-                if (selected) ...[
-                  if (delay != null) const SizedBox(width: 5),
-                  const Icon(
-                    Icons.check_rounded,
-                    size: 18,
-                    semanticLabel: 'Выбран',
-                  ),
-                ],
-              ],
+          : Icon(
+              Icons.check_rounded,
+              size: 18,
+              color: colors.primary,
+              semanticLabel: 'Выбран',
             ),
       onTap: _importing || _validating
           ? null
@@ -1012,48 +1079,38 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     );
   }
 
-  void _openVpnControls() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) => Scaffold(
-          appBar: AppBar(title: const Text('Настройки VPN')),
-          body: ListView(
-            children: [
-              if (_diagnostics case final DiagnosticsControl core)
-                ListTile(
-                  leading: const Icon(Icons.receipt_long_outlined),
-                  title: const Text('Журнал VPN'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => VPNJournalPage(core: core),
-                    ),
-                  ),
-                ),
-              if (widget.core case final VPNSystemSettings settings)
-                ListTile(
-                  leading: const Icon(Icons.shield_outlined),
-                  title: const Text('Защита VPN'),
-                  subtitle: const Text(
-                    'Постоянный VPN и блокировка соединений',
-                  ),
-                  trailing: const Icon(Icons.open_in_new),
-                  onTap: () async {
-                    try {
-                      await settings.openVpnSettings();
-                    } on PlatformException {
-                      if (mounted) {
-                        _notify('Откройте VPN в настройках Android.');
-                      }
-                    }
-                  },
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
+  void _openVPNJournal() {
+    final core = _diagnostics;
+    if (core == null) return;
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => VPNJournalPage(core: core)));
   }
+
+  Future<void> _openSystemVPNSettings() async {
+    final core = widget.core;
+    if (core is! VPNSystemSettings) return;
+    try {
+      await (core as VPNSystemSettings).openVpnSettings();
+    } on PlatformException {
+      if (mounted) _notify('Откройте VPN в настройках Android.');
+    }
+  }
+
+  String? _refreshError(Subscription item) =>
+      _refreshErrors[item.id] ??
+      (item.refreshFailed ? 'Обновление не удалось. Список сохранён.' : null);
+
+  Widget _inlineError(String message) => Semantics(
+    liveRegion: true,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
+      child: Text(
+        message,
+        style: TextStyle(color: Theme.of(context).colorScheme.error),
+      ),
+    ),
+  );
 
   Widget _connectionActions() {
     final canStop = _vpnStatus == 'on' || _vpnStatus == 'starting';
@@ -1073,24 +1130,31 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 icon: const Icon(Icons.sync_rounded),
                 label: const Text('Переподключить и применить настройки'),
               ),
+            if (_reconnectError case final String message)
+              _inlineError(message),
             if (_tab == 0)
               FilledButton.icon(
                 key: const ValueKey('sticky-connect'),
                 style: FilledButton.styleFrom(
                   backgroundColor: canStop
                       ? colors.surfaceContainerHigh
-                      : colors.onSurface,
-                  foregroundColor: canStop ? colors.onSurface : colors.surface,
+                      : colors.primary,
+                  foregroundColor: canStop
+                      ? colors.onSurface
+                      : colors.onPrimary,
                   minimumSize: const Size.fromHeight(48),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
                 onPressed: !_changingVpn && (canStart || canStop)
                     ? _toggleVPN
                     : null,
                 icon: const Icon(Icons.power_settings_new),
-                label: Text(canStop ? 'Отключить VPN' : 'Подключить VPN'),
+                label: Text(
+                  canStop ? 'Отключить VPN' : 'Подключить VPN',
+                  textAlign: TextAlign.center,
+                ),
               ),
           ],
         ),
@@ -1122,31 +1186,28 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             hintText: 'Найти сервер или подписку',
           ),
         ),
-      const SizedBox(height: 10),
-      FilledButton.icon(
-        onPressed: _importing || _validating ? null : _import,
-        icon: _importing
-            ? const SizedBox.square(
-                dimension: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.add_rounded),
-        label: Text(_importing ? 'Загрузка…' : 'Добавить подписку'),
-      ),
-      const SizedBox(height: 10),
-      if (widget.core case final ServerGroupControl control)
-        ListTile(
-          leading: const Icon(Icons.dns_outlined),
-          title: const Text('Управление группами'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _openServerGroups(control),
-        ),
+      const SizedBox(height: 12),
       if (_subscriptions.isEmpty)
-        const Card(
-          child: ListTile(
-            leading: Icon(Icons.layers_outlined),
-            title: Text('Подписок пока нет'),
-            subtitle: Text('Импортируйте HTTPS-ссылку, Hysteria 2 или VLESS.'),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Подписок пока нет',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 4),
+                const Text('Добавьте ссылку или конфиг VPN.'),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _importing || _validating ? null : _import,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Добавить подписку'),
+                ),
+              ],
+            ),
           ),
         ),
       if (_subscriptions.isNotEmpty && visible.isEmpty)
@@ -1162,63 +1223,133 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Widget _subscriptionCard(Subscription subscription, String query) {
     final probing = _inlineProbe?.subscription == subscription.id;
     final batch = _inlineProbe == (subscription: subscription.id, server: null);
-    final servers = subscription.servers.where(
-      (server) =>
-          query.isEmpty ||
-          subscription.title.toLowerCase().contains(query) ||
-          server.name.toLowerCase().contains(query) ||
-          server.protocol.toLowerCase().contains(query),
-    );
+    final expanded =
+        query.isNotEmpty ||
+        _expandedSubscriptionCards.contains(subscription.id);
+    final servers = subscription.servers
+        .where(
+          (server) =>
+              query.isEmpty ||
+              subscription.title.toLowerCase().contains(query) ||
+              server.name.toLowerCase().contains(query) ||
+              server.protocol.toLowerCase().contains(query),
+        )
+        .toList();
+    final title = subscription.title.isEmpty
+        ? 'Импортированные серверы'
+        : subscription.title;
+    final canRefresh =
+        subscription.canRefresh && !_importing && !_validating && !probing;
+    final refreshing = _refreshingSubscription == subscription.id;
+    final canProbe =
+        _diagnostics != null &&
+        subscription.servers.any((server) => !server.missing);
+    final probeLabel = batch
+        ? 'Остановить замер'
+        : subscription.id == 'server-groups'
+        ? 'Проверить все группы'
+        : 'Проверить всю подписку';
+    final VoidCallback? probe =
+        (_inlineProbe == null && !_importing && !_validating) ||
+            (batch && !_cancelInlineProbe)
+        ? () => _checkLatency(subscription)
+        : null;
     return Card(
-      child: ExpansionTile(
-        key: PageStorageKey((
-          'subscription:${subscription.id}',
-          query.isNotEmpty,
-        )),
-        initiallyExpanded: query.isNotEmpty,
-        title: Text(
-          subscription.title.isEmpty
-              ? 'Импортированные серверы'
-              : subscription.title,
-        ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_diagnostics != null &&
-              subscription.servers.any((server) => !server.missing))
-            ListTile(
-              leading: Icon(batch ? Icons.stop_circle_outlined : Icons.speed),
-              title: Text(
-                batch
-                    ? 'Остановить замер'
-                    : subscription.id == 'server-groups'
-                    ? 'Проверить все группы'
-                    : 'Проверить всю подписку',
+          Row(
+            children: [
+              Expanded(
+                child: ListTile(
+                  title: Text(title),
+                  subtitle: Text(
+                    'Серверов: ${subscription.servers.where((server) => !server.missing).length}',
+                  ),
+                  trailing: Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                  ),
+                  onTap: query.isNotEmpty
+                      ? null
+                      : () => setState(() {
+                          if (expanded) {
+                            _expandedSubscriptionCards.remove(subscription.id);
+                          } else {
+                            _expandedSubscriptionCards.add(subscription.id);
+                          }
+                        }),
+                ),
               ),
-              onTap:
-                  (_inlineProbe == null && !_importing && !_validating) ||
-                      (batch && !_cancelInlineProbe)
-                  ? () => _checkLatency(subscription)
-                  : null,
-            ),
-          if (probing) const LinearProgressIndicator(),
+              if (!expanded && subscription.canRefresh)
+                IconButton(
+                  tooltip: 'Обновить подписку',
+                  icon: const Icon(Icons.refresh_rounded),
+                  onPressed: canRefresh
+                      ? () => _refresh(subscription.id)
+                      : null,
+                ),
+              if (!expanded && canProbe)
+                IconButton(
+                  tooltip: probeLabel,
+                  icon: Icon(
+                    batch ? Icons.stop_circle_outlined : Icons.speed_rounded,
+                  ),
+                  onPressed: probe,
+                ),
+            ],
+          ),
+          if (probing || refreshing) const LinearProgressIndicator(),
+          if (_refreshError(subscription) case final String message)
+            _inlineError(message),
           if (_probeError == subscription.id)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Text(
-                'Не удалось измерить задержку',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+            _inlineError('Не удалось измерить задержку'),
+          if (expanded) ...[
+            if (subscription.canRefresh || canProbe)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    if (subscription.canRefresh)
+                      FilledButton.tonalIcon(
+                        icon: const Icon(Icons.refresh_rounded, size: 18),
+                        label: Text(
+                          refreshing ? 'Обновляем…' : 'Обновить подписку',
+                        ),
+                        onPressed: canRefresh
+                            ? () => _refresh(subscription.id)
+                            : null,
+                      ),
+                    if (canProbe)
+                      FilledButton.tonalIcon(
+                        icon: Icon(
+                          batch
+                              ? Icons.stop_circle_outlined
+                              : Icons.speed_rounded,
+                          size: 18,
+                        ),
+                        label: Text(probeLabel),
+                        onPressed: probe,
+                      ),
+                  ],
+                ),
               ),
+            SubscriptionDetails(
+              subscription: subscription,
+              showRefreshFailure: false,
             ),
-          if (subscription.canRefresh)
-            ListTile(
-              leading: const Icon(Icons.refresh_rounded),
-              title: const Text('Обновить подписку'),
-              onTap: _importing || _validating || probing
-                  ? null
-                  : () => _refresh(subscription.id),
-            ),
-          SubscriptionDetails(subscription: subscription),
-          for (final server in servers)
-            _subscriptionServer(subscription, server),
+            if (servers.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('В подписке пока нет серверов.'),
+              ),
+            for (final server in servers) ...[
+              const Divider(height: 1, indent: 16, endIndent: 16),
+              _subscriptionServer(subscription, server),
+            ],
+          ],
         ],
       ),
     );
@@ -1297,6 +1428,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   List<Widget> _rulesPage() {
     return [
+      FilledButton.icon(
+        onPressed: _validating || _importing ? null : () => _editRule(),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Добавить правило'),
+      ),
+      const SizedBox(height: 4),
       if (_routing != null) ...[
         Card(
           child: Column(
@@ -1328,11 +1465,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 8),
       ],
-      FilledButton.icon(
-        onPressed: _validating || _importing ? null : () => _editRule(),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Добавить правило'),
-      ),
+      if (_rules.isEmpty)
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+          child: Text('Правил пока нет'),
+        ),
       if (_rules.length > 1)
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 12, 4, 8),
@@ -1344,7 +1481,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             children: [
               for (var index = 0; index < _rules.length; index++) ...[
                 if (index > 0)
-                  const Divider(height: 1, indent: 54, endIndent: 14),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
                 _ruleTile(index),
               ],
             ],
@@ -1370,6 +1507,31 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 PopupMenuItem(value: action, child: Text(action.label)),
             ],
           ),
+        ),
+      ),
+      Card(
+        child: ListTile(
+          leading: const Icon(Icons.link_rounded),
+          title: const Text('Профиль через профиль'),
+          subtitle: Text(
+            _via.isEmpty
+                ? (_servers.length < 2
+                      ? 'Нужно два VPN-профиля'
+                      : 'Выберите входной и выходной профили')
+                : _via.entries
+                      .map(
+                        (hop) =>
+                            '${_serverName(hop.key)} через ${_serverName(hop.value)}',
+                      )
+                      .join('\n'),
+          ),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap:
+              _chainServers.isEmpty ||
+                  (_servers.length < 2 && _via.isEmpty) ||
+                  _validating
+              ? null
+              : _editChain,
         ),
       ),
       if (widget.core.supportsAndroidRules)
@@ -1416,31 +1578,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             ),
           ),
         ),
-      Card(
-        child: ListTile(
-          leading: const Icon(Icons.link_rounded),
-          title: const Text('Профиль через профиль'),
-          subtitle: Text(
-            _via.isEmpty
-                ? (_servers.length < 2
-                      ? 'Нужно два VPN-профиля'
-                      : 'Выберите входной и выходной профили')
-                : _via.entries
-                      .map(
-                        (hop) =>
-                            '${_serverName(hop.key)} через ${_serverName(hop.value)}',
-                      )
-                      .join('\n'),
-          ),
-          trailing: const Icon(Icons.chevron_right_rounded),
-          onTap:
-              _chainServers.isEmpty ||
-                  (_servers.length < 2 && _via.isEmpty) ||
-                  _validating
-              ? null
-              : _editChain,
-        ),
-      ),
     ];
   }
 
@@ -1448,13 +1585,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final rule = _rules[index];
     final label = rule.server.isEmpty
         ? rule.action.label
-        : _serverName(rule.server);
+        : '${rule.action.label} · ${_serverName(rule.server)}';
     return ListTile(
-      leading: Icon(switch (rule.action) {
-        RouteAction.tunnel => Icons.vpn_lock_outlined,
-        RouteAction.direct => Icons.open_in_new_rounded,
-        RouteAction.block => Icons.block_rounded,
-      }),
       title: Text(rule.title),
       subtitle: Text(label),
       onTap: _validating ? null : () => _editRule(index),

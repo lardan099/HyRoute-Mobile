@@ -1,31 +1,35 @@
 import 'package:flutter/material.dart';
 
-const accent = Color(0xff3c6864);
+const accent = Color(0xff244fb1);
+const connectionPanelLight = Color(0xff172b51);
+const connectionPanelDark = Color(0xff213557);
+const connectionDetail = Color(0xffceddfa);
+const connectionActive = Color(0xffa8e3cf);
 
 ThemeData appTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(seedColor: accent, brightness: brightness)
       .copyWith(
-        primary: dark ? const Color(0xffa8ceca) : const Color(0xff2d605d),
-        onPrimary: dark ? const Color(0xff162322) : Colors.white,
-        onSurface: dark ? const Color(0xffeeefee) : const Color(0xff1b1e1d),
+        primary: dark ? const Color(0xffafc8ff) : const Color(0xff244fb1),
+        onPrimary: dark ? const Color(0xff182d58) : Colors.white,
+        onSurface: dark ? const Color(0xffedf3ff) : const Color(0xff18243b),
         onSurfaceVariant: dark
-            ? const Color(0xffa5aba8)
-            : const Color(0xff515a55),
-        surface: dark ? const Color(0xff171918) : const Color(0xfffafafa),
+            ? const Color(0xffafbed6)
+            : const Color(0xff53637b),
+        surface: dark ? const Color(0xff172131) : const Color(0xffffffff),
         surfaceContainerHigh: dark
-            ? const Color(0xff222624)
-            : const Color(0xffe8ece9),
+            ? const Color(0xff243149)
+            : const Color(0xffe7edf7),
         outlineVariant: dark
-            ? const Color(0xff343937)
-            : const Color(0xffd9dedb),
+            ? const Color(0xff34455f)
+            : const Color(0xffd6dfeb),
       );
   final theme = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: dark
-        ? const Color(0xff111312)
-        : const Color(0xfff3f5f3),
+        ? const Color(0xff101723)
+        : const Color(0xfff4f7fb),
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
     ),
@@ -33,12 +37,23 @@ ThemeData appTheme(Brightness brightness) {
       backgroundColor: scheme.surface,
       elevation: 0,
       height: 60,
-      indicatorColor: Colors.transparent,
+      indicatorColor: scheme.primary.withValues(alpha: 0.12),
+      labelTextStyle: WidgetStateProperty.resolveWith(
+        (states) => TextStyle(
+          fontSize: 12,
+          fontWeight: states.contains(WidgetState.selected)
+              ? FontWeight.w700
+              : FontWeight.w500,
+          color: states.contains(WidgetState.selected)
+              ? scheme.primary
+              : scheme.onSurfaceVariant,
+        ),
+      ),
       iconTheme: WidgetStateProperty.resolveWith(
         (states) => IconThemeData(
           size: 21,
           color: states.contains(WidgetState.selected)
-              ? scheme.onSurface
+              ? scheme.primary
               : scheme.onSurfaceVariant,
         ),
       ),
@@ -47,11 +62,18 @@ ThemeData appTheme(Brightness brightness) {
       color: scheme.surface,
       elevation: 0,
       margin: const EdgeInsets.symmetric(vertical: 4),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),
     appBarTheme: AppBarTheme(
-      backgroundColor: dark ? const Color(0xff111312) : const Color(0xfff3f5f3),
+      backgroundColor: dark ? const Color(0xff101723) : const Color(0xfff4f7fb),
       surfaceTintColor: Colors.transparent,
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(44, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      ),
     ),
     dividerTheme: DividerThemeData(color: scheme.outlineVariant),
   );
@@ -65,7 +87,7 @@ ThemeData appTheme(Brightness brightness) {
       ),
       titleLarge: type.titleLarge?.copyWith(
         height: 1.2,
-        letterSpacing: -0.25,
+        letterSpacing: -0.4,
         fontWeight: FontWeight.w600,
       ),
       titleMedium: type.titleMedium?.copyWith(

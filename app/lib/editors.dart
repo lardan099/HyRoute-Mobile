@@ -108,24 +108,22 @@ class _SubscriptionEditorState extends State<SubscriptionEditor> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
-                child: ListView(
+                child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
-                  children: [
-                    TextField(
-                      controller: _input,
-                      enabled: !_busy,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      minLines: 4,
-                      maxLines: 9,
-                      onChanged: (_) => setState(() => _error = null),
-                      decoration: const InputDecoration(
-                        labelText: 'Ссылка или конфиг',
-                        hintText: 'https://…',
-                        alignLabelWithHint: true,
-                      ),
+                  child: TextField(
+                    controller: _input,
+                    enabled: !_busy,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    minLines: 4,
+                    maxLines: 9,
+                    onChanged: (_) => setState(() => _error = null),
+                    decoration: const InputDecoration(
+                      labelText: 'Ссылка или конфиг',
+                      hintText: 'https://…',
+                      alignLabelWithHint: true,
                     ),
-                  ],
+                  ),
                 ),
               ),
               Padding(
@@ -783,11 +781,13 @@ class ChainEditor extends StatefulWidget {
     required this.servers,
     required this.entries,
     required this.via,
+    required this.save,
   });
 
   final List<Server> servers;
   final List<Server> entries;
   final Map<String, String> via;
+  final Future<String?> Function(String exit, String entry) save;
 
   @override
   State<ChainEditor> createState() => _ChainEditorState();
@@ -796,6 +796,25 @@ class ChainEditor extends StatefulWidget {
 class _ChainEditorState extends State<ChainEditor> {
   String? _exit;
   var _entry = '';
+  var _saving = false;
+  String? _error;
+
+  Future<void> _save(String entry) async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final error = await widget.save(_exit!, entry);
+    if (!mounted) return;
+    if (error == null) {
+      Navigator.pop(context);
+    } else {
+      setState(() {
+        _saving = false;
+        _error = error;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -804,62 +823,85 @@ class _ChainEditorState extends State<ChainEditor> {
         .toList();
     final entryExists = entries.any((server) => server.id == _entry);
     final saved = widget.via[_exit];
-    return AlertDialog(
-      scrollable: true,
-      title: const Text('Цепочка профилей'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          DropdownButtonFormField<String>(
-            key: const ValueKey('chain-exit'),
-            isExpanded: true,
-            initialValue: _exit,
-            hint: const Text('Выбрать выходной профиль'),
-            decoration: const InputDecoration(labelText: 'Выходной профиль'),
-            items: serverItems(widget.servers),
-            onChanged: (value) => setState(() {
-              _exit = value!;
-              _entry = widget.via[_exit] ?? '';
-            }),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            key: ValueKey(_exit),
-            isExpanded: true,
-            initialValue: entryExists ? _entry : '',
-            decoration: const InputDecoration(labelText: 'Подключать через'),
-            items: serverItems(
-              entries,
-              emptyLabel: 'Без промежуточного профиля',
+    return PopScope(
+      canPop: !_saving,
+      child: AlertDialog(
+        scrollable: true,
+        title: const Text('Цепочка профилей'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              key: const ValueKey('chain-exit'),
+              isExpanded: true,
+              initialValue: _exit,
+              hint: const Text('Выбрать выходной профиль'),
+              decoration: const InputDecoration(labelText: 'Выходной профиль'),
+              items: serverItems(widget.servers),
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() {
+                      _exit = value!;
+                      _entry = widget.via[_exit] ?? '';
+                      _error = null;
+                    }),
             ),
-            onChanged: _exit == null
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              key: ValueKey(_exit),
+              isExpanded: true,
+              initialValue: entryExists ? _entry : '',
+              decoration: const InputDecoration(labelText: 'Подключать через'),
+              items: serverItems(
+                entries,
+                emptyLabel: 'Без промежуточного профиля',
+              ),
+              onChanged: _saving || _exit == null
+                  ? null
+                  : (value) => setState(() {
+                      _entry = value!;
+                      _error = null;
+                    }),
+            ),
+            if (!entryExists && _entry.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Первый профиль недоступен. Выберите замену.'),
+              ),
+            if (_error case final String error)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    error,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.pop(context),
+            child: const Text('Отмена'),
+          ),
+          if (saved != null)
+            TextButton(
+              onPressed: _saving ? null : () => _save(''),
+              child: const Text('Удалить связь'),
+            ),
+          FilledButton(
+            onPressed:
+                _saving || _exit == null || !entryExists || saved == _entry
                 ? null
-                : (value) => setState(() => _entry = value!),
+                : () => _save(_entry),
+            child: Text(_saving ? 'Сохраняем…' : 'Сохранить'),
           ),
-          if (!entryExists && _entry.isNotEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text('Первый профиль недоступен. Выберите замену.'),
-            ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Отмена'),
-        ),
-        if (saved != null)
-          TextButton(
-            onPressed: () => Navigator.pop(context, (_exit!, '')),
-            child: const Text('Удалить связь'),
-          ),
-        FilledButton(
-          onPressed: _exit == null || !entryExists || saved == _entry
-              ? null
-              : () => Navigator.pop(context, (_exit!, _entry)),
-          child: const Text('Сохранить'),
-        ),
-      ],
     );
   }
 }

@@ -11,6 +11,7 @@ class _TestCore implements ClientCore {
   String? configuration;
   String? input;
   bool rejectSave = false;
+  bool failImport = false;
   var state = const ClientState();
 
   @override
@@ -58,6 +59,7 @@ class _TestCore implements ClientCore {
   @override
   Future<ClientState> importSubscription(String input) async {
     this.input = input;
+    if (failImport) throw PlatformException(code: "invalid");
     const subscription = Subscription(
       id: 'test',
       canRefresh: true,
@@ -229,7 +231,12 @@ Future<_TestCore> _openApp(WidgetTester tester, {_TestCore? core}) async {
 }
 
 Future<void> _tap(WidgetTester tester, String label) async {
-  await tester.tap(find.text(label));
+  final matches = find.text(label);
+  final tab = find.descendant(
+    of: find.byType(NavigationBar),
+    matching: matches,
+  );
+  await tester.tap(tab.evaluate().isEmpty ? matches : tab);
   await tester.pumpAndSettle();
 }
 
@@ -239,7 +246,13 @@ Future<void> _importTestSubscription(WidgetTester tester) async {
 }
 
 Future<void> _submitTestSubscription(WidgetTester tester) async {
-  await _tap(tester, 'Добавить подписку');
+  final add = find.byTooltip('Добавить подписку');
+  if (add.evaluate().isEmpty) {
+    await _tap(tester, 'Добавить подписку');
+  } else {
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+  }
   await tester.enterText(
     find.byType(TextField),
     'https://example.org/subscribe',
@@ -485,8 +498,6 @@ void main() {
     await tester.pumpAndSettle();
     await _tap(tester, 'Журнал VPN');
     expect(find.text('00:00:01  VPN отключён'), findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
     await tester.pageBack();
     await tester.pumpAndSettle();
 
@@ -795,6 +806,8 @@ void main() {
         tester.getTopLeft(first).dy,
         lessThan(tester.getTopLeft(second).dy),
       );
+      await tester.ensureVisible(find.text('Сначала быстрые'));
+      await tester.pumpAndSettle();
       await _tap(tester, 'Сначала быстрые');
       expect(
         tester.getTopLeft(second).dy,
@@ -845,6 +858,35 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+    'keeps an invalid import visible above the keyboard on compact screens',
+    (tester) async {
+      await _openApp(tester, core: _TestCore()..failImport = true);
+      tester.view.physicalSize = const Size(320, 650);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      addTearDown(tester.view.resetViewInsets);
+
+      await _tap(tester, 'Добавить подписку');
+      final input = find.byType(TextField);
+      await tester.enterText(input, 'invalid-subscription');
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      await tester.pumpAndSettle();
+      await _tap(tester, 'Импортировать');
+
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'invalid-subscription',
+      );
+      expect(find.text('Импортировать').hitTestable(), findsOneWidget);
+      expect(
+        find.textContaining('Импорт не удался').hitTestable(),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('switches server and applies it with one reconnect action', (
     tester,
   ) async {
@@ -853,7 +895,7 @@ void main() {
         subscriptions: [
           Subscription(
             id: 'work',
-            title: 'Серверы',
+            title: 'Рабочая подписка',
             servers: [
               Server(id: 'one', name: 'Первый', protocol: 'VLESS'),
               Server(id: 'two', name: 'Второй', protocol: 'Hysteria 2'),

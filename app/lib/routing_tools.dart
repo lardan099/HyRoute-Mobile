@@ -358,9 +358,11 @@ class SubscriptionDetails extends StatelessWidget {
     super.key,
     required this.subscription,
     this.compact = false,
+    this.showRefreshFailure = true,
   });
   final Subscription subscription;
   final bool compact;
+  final bool showRefreshFailure;
 
   static String _bytes(int value) {
     const units = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ', 'ПиБ', 'ЭиБ'];
@@ -414,7 +416,7 @@ class SubscriptionDetails extends StatelessWidget {
               '${expiry.isBefore(DateTime.now()) ? 'Истекла' : 'Действует до'} ${local.formatCompactDate(expiry)}',
             ),
           if (item.canRefresh) ...[
-            if (item.refreshFailed)
+            if (item.refreshFailed && showRefreshFailure)
               Text(
                 attempted == null
                     ? 'Обновление не удалось'
