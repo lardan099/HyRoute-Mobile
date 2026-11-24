@@ -56,6 +56,8 @@ final class SubscriptionAndRulesTests: XCTestCase {
   func testRulesExposeRepairBeforeLongListAndSettingsInTheirOwnPane() {
     let app = launch()
     tap(app.buttons["tab-rules"])
+    XCTAssertTrue(app.staticTexts["rules-repair-label"].isHittable)
+    XCTAssertTrue(app.buttons["rule-row-0"].isHittable)
     tap(app.buttons["rules-repair"])
     tap(app.buttons["geosite:telegram"].firstMatch)
     XCTAssertTrue(app.navigationBars["Правило"].waitForExistence(timeout: 10))

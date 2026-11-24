@@ -402,7 +402,8 @@ private struct SubscriptionsPage: View {
       }
     }
     .hyList()
-    .searchable(text: $query, prompt: "Найти сервер или подписку")
+    .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "Найти сервер или подписку")
     .navigationTitle("Подписки")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {

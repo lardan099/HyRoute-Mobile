@@ -60,21 +60,20 @@ struct RulesPage: View {
       ruleSetLink
       routeCheckLink
       if !brokenRules.isEmpty || !brokenChains.isEmpty {
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 10) { repairLabel.fixedSize(); Spacer(minLength: 0); repairMenu.fixedSize() }
-          VStack(alignment: .leading, spacing: 0) { repairLabel; repairMenu }
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Недоступные профили · \(brokenRules.count + brokenChains.count)")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(HyStyle.failure)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("rules-repair-label")
+          repairMenu
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
+        .padding(.top, 8)
         .background(HyStyle.surface, in: RoundedRectangle(cornerRadius: 10))
       }
     }
-  }
-
-  private var repairLabel: some View {
-    Label("Недоступные профили · \(brokenRules.count + brokenChains.count)", systemImage: "exclamationmark.circle")
-      .font(.subheadline.weight(.semibold)).foregroundStyle(HyStyle.failure)
-      .fixedSize(horizontal: false, vertical: true)
-      .padding(.vertical, 4)
   }
 
   private var repairMenu: some View {
@@ -86,6 +85,7 @@ struct RulesPage: View {
         Button("Цепочки профилей") { editingChain = true }
       }
     }
+    .buttonStyle(.borderless)
     .font(.subheadline.weight(.semibold))
     .accessibilityIdentifier("rules-repair")
     .frame(minHeight: 44)
