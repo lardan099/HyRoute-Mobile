@@ -213,6 +213,7 @@ private struct RootView: View {
               .multilineTextAlignment(.center)
               .lineLimit(2)
               .minimumScaleFactor(0.8)
+              .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
           }
           .frame(maxWidth: .infinity, minHeight: 48)
           .foregroundStyle(tab == item ? HyStyle.accent : HyStyle.muted)
@@ -328,9 +329,15 @@ private struct SubscriptionsPage: View {
   @ObservedObject var client: Client
   @ObservedObject var measurements: SubscriptionMeasurements
   @State private var adding = false
+  @State private var query = ""
 
   var body: some View {
-    List {
+    let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let visible = client.state.subscriptions.filter { item in
+      search.isEmpty || item.name.localizedCaseInsensitiveContains(search) ||
+        item.servers.contains { $0.displayTitle.localizedCaseInsensitiveContains(search) }
+    }
+    return List {
       Section {
         NavigationLink {
           ServerGroupsPage(client: client)
@@ -354,11 +361,17 @@ private struct SubscriptionsPage: View {
           .padding(.vertical, 6)
         }
         .listRowBackground(HyStyle.surface)
+      } else if visible.isEmpty {
+        Text("Серверы и подписки не найдены.").foregroundStyle(HyStyle.muted)
+          .listRowBackground(HyStyle.canvas)
       } else {
         Section("Мои подписки") {
-          ForEach(client.state.subscriptions) { item in
+          ForEach(visible) { item in
             NavigationLink {
-              SubscriptionPage(client: client, id: item.id, measurements: measurements)
+              SubscriptionPage(
+                client: client, id: item.id, measurements: measurements,
+                initialQuery: item.name.localizedCaseInsensitiveContains(search) ? "" : search
+              )
             } label: {
               HyRow(title: item.name, symbol: "link",
                     detail: "Серверов: \(item.servers.filter { $0.missing != true }.count)", disclosure: false)
@@ -370,6 +383,7 @@ private struct SubscriptionsPage: View {
       }
     }
     .hyList()
+    .searchable(text: $query, prompt: "Найти сервер или подписку")
     .navigationTitle("Подписки")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -388,24 +402,37 @@ struct SubscriptionPage: View {
   let id: String
   @ObservedObject var measurements: SubscriptionMeasurements
   @State private var expandedGroups: Set<String> = []
+  @State private var query: String
+
+  init(client: Client, id: String, measurements: SubscriptionMeasurements, initialQuery: String = "") {
+    self.client = client
+    self.id = id
+    self.measurements = measurements
+    _query = State(initialValue: initialQuery)
+  }
 
   private var runningHere: Bool { measurements.request?.subscriptionID == id }
 
   var body: some View {
     if let item = client.state.subscriptions.first(where: { $0.id == id }) {
+      let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+      let visible = item.servers.filter { profile in
+        search.isEmpty || profile.displayTitle.localizedCaseInsensitiveContains(search)
+      }
       ScrollView {
         VStack(alignment: .leading, spacing: 12) {
           if item.hasMetadata {
             SubscriptionDetails(item: item)
           }
-          if item.servers.isEmpty {
-            Text("В подписке пока нет серверов.").foregroundStyle(HyStyle.muted)
+          if visible.isEmpty {
+            Text(item.servers.isEmpty ? "В подписке пока нет серверов." : "Серверы не найдены.")
+              .foregroundStyle(HyStyle.muted)
               .frame(maxWidth: .infinity, alignment: .leading)
           } else {
             LazyVStack(spacing: 0) {
-              ForEach(item.servers) { profile in
+              ForEach(visible) { profile in
                 serverRow(profile, in: item)
-                if profile.id != item.servers.last?.id {
+                if profile.id != visible.last?.id {
                   Divider().overlay(HyStyle.stroke).padding(.leading, 52)
                 }
               }
@@ -420,6 +447,7 @@ struct SubscriptionPage: View {
         probeControls(item)
       }
       .hyScreen()
+      .searchable(text: $query, prompt: "Найти сервер")
       .navigationTitle(item.name)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

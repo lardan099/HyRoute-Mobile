@@ -2,16 +2,16 @@ import SwiftUI
 import UIKit
 
 enum HyStyle {
-  static let canvas = adaptive(light: 0xF4F5F6, dark: 0x121417)
-  static let surface = adaptive(light: 0xFFFFFF, dark: 0x1D2024)
-  static let inset = adaptive(light: 0xEAEDF0, dark: 0x292E34)
-  static let stroke = adaptive(light: 0xD8DDE3, dark: 0x373E46)
-  static let ink = adaptive(light: 0x171C24, dark: 0xF1F4F6)
-  static let muted = adaptive(light: 0x536171, dark: 0xACB9C5)
-  static let accent = adaptive(light: 0x12664F, dark: 0x9BEAC5)
-  static let fill = adaptive(light: 0x14674F, dark: 0xA2EDC9)
-  static let onFill = adaptive(light: 0xFFFFFF, dark: 0x102A20)
-  static let success = adaptive(light: 0x116747, dark: 0x90E6BE)
+  static let canvas = adaptive(light: 0xF0F3F5, dark: 0x101620)
+  static let surface = adaptive(light: 0xFFFFFF, dark: 0x181F2B)
+  static let inset = adaptive(light: 0xE8EDF0, dark: 0x232E3D)
+  static let stroke = adaptive(light: 0xD8DFE5, dark: 0x303C4C)
+  static let ink = adaptive(light: 0x181D25, dark: 0xF2F4F3)
+  static let muted = adaptive(light: 0x505D6A, dark: 0xACB7C5)
+  static let accent = adaptive(light: 0x405B1C, dark: 0xD1FB8D)
+  static let fill = accent
+  static let onFill = adaptive(light: 0xFFFFFF, dark: 0x1A2710)
+  static let success = adaptive(light: 0x356335, dark: 0xA9E1A1)
   static let failure = adaptive(light: 0xA12D38, dark: 0xFFA3AA)
 
   private static func adaptive(light: UInt32, dark: UInt32) -> Color {
@@ -34,7 +34,7 @@ struct HyIcon: View {
       .font(.system(size: size * 0.46, weight: .semibold))
       .foregroundStyle(HyStyle.accent)
       .frame(width: size, height: size)
-      .background(HyStyle.inset, in: RoundedRectangle(cornerRadius: 10))
+      .background(HyStyle.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 9))
       .accessibilityHidden(true)
   }
 }

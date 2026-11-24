@@ -752,6 +752,39 @@ void main() {
     },
   );
 
+  testWidgets('finds matching profiles across subscriptions', (tester) async {
+    final core = _InlineDiagnosticsTestCore()
+      ..state = const ClientState(
+        subscriptions: [
+          Subscription(
+            id: 'mixed',
+            title: 'Рабочие',
+            servers: [
+              Server(id: 'finland', name: 'Финляндия', protocol: 'VLESS'),
+              Server(id: 'japan', name: 'Япония', protocol: 'Hysteria 2'),
+            ],
+          ),
+          Subscription(
+            id: 'separate',
+            title: 'Резерв',
+            servers: [Server(id: 'poland', name: 'Польша', protocol: 'VLESS')],
+          ),
+        ],
+      );
+    await _openApp(tester, core: core);
+    await _tap(tester, 'Подписки');
+    final search = find.byKey(const ValueKey('subscription-search'));
+    await tester.enterText(search, 'фИн');
+    await tester.pumpAndSettle();
+    expect(find.text('Финляндия'), findsOneWidget);
+    expect(find.text('Япония'), findsNothing);
+    expect(find.text('Резерв'), findsNothing);
+    await tester.enterText(search, 'нет такого');
+    await tester.pumpAndSettle();
+    expect(find.text('Серверы и подписки не найдены.'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('switches server and applies it with one reconnect action', (
     tester,
   ) async {

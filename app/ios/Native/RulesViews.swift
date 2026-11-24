@@ -128,6 +128,12 @@ struct RulesPage: View {
         .buttonStyle(.plain)
         .listRowBackground(HyStyle.canvas)
       }
+      if routing.rules.count > 1 {
+        Text("Срабатывает первое подходящее правило сверху.")
+          .font(.footnote)
+          .foregroundStyle(HyStyle.muted)
+          .listRowBackground(HyStyle.canvas)
+      }
       ForEach(routing.rules.indices, id: \.self) { index in
         let rule = routing.rules[index]
         let unavailable = rule.hasUnavailableProfile(available: available)
@@ -271,7 +277,7 @@ private struct RuleEditor: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 14) {
           VStack(alignment: .leading, spacing: 10) {
-            HyHeading(text: "1. Что направить")
+            HyHeading(text: "Что совпадает")
             TextField("Сайт, ссылка или IP", text: $destination, axis: .vertical)
               .lineLimit(2...5)
               .accessibilityIdentifier("rule-destination")
@@ -294,7 +300,7 @@ private struct RuleEditor: View {
           .hyCard()
 
           VStack(alignment: .leading, spacing: 8) {
-            HyHeading(text: "2. Куда направить")
+            HyHeading(text: "Куда направить")
             ForEach(RouteAction.allCases) { option in
               Button { action = option } label: {
                 HStack(spacing: 10) {

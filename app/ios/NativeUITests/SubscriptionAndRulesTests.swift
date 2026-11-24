@@ -418,8 +418,12 @@ final class CompactLayoutTests: XCTestCase {
     XCTAssertGreaterThan(status.frame.height, 24, "Expected accessibility content size")
     XCTAssertTrue(app.buttons["dashboard-vpn-button"].isHittable)
     let details = app.buttons["dashboard-server-details-preview"]
+    let connect = app.buttons["dashboard-vpn-button"]
+    let pinnedPosition = connect.frame.minY
     revealDashboardDetails(details, in: app)
     XCTAssertTrue(details.isHittable)
+    XCTAssertTrue(connect.isHittable)
+    XCTAssertEqual(connect.frame.minY, pinnedPosition, accuracy: 2)
     details.tap()
     XCTAssertTrue(app.buttons["subscription-check-all"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["subscription-check-all"].isHittable)

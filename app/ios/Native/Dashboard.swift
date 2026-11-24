@@ -14,7 +14,7 @@ struct Dashboard: View {
         connectionCard
         if !client.state.subscriptions.isEmpty {
           LazyVStack(alignment: .leading, spacing: 10) {
-            Text("Подписки").font(.title2.weight(.semibold))
+            Text("Серверы").font(.title2.weight(.bold))
               .foregroundStyle(HyStyle.ink)
               .accessibilityAddTraits(.isHeader)
               .padding(.bottom, 3)
@@ -30,6 +30,21 @@ struct Dashboard: View {
       .padding(.vertical, 12)
     }
     .accessibilityIdentifier("dashboard-scroll")
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if client.state.selected != nil || client.vpnStatus.isActiveTunnel {
+        Button { Task { await client.toggleVPN() } } label: {
+          Label(client.vpnStatus.isActiveTunnel ? "Отключить VPN" : "Подключить VPN", systemImage: "power")
+        }
+        .buttonStyle(HyButton(prominent: !client.vpnStatus.isActiveTunnel))
+        .disabled(client.vpnBusy || client.vpnStatus == .disconnecting)
+        .accessibilityIdentifier("dashboard-vpn-button")
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 676)
+        .frame(maxWidth: .infinity)
+        .background(HyStyle.canvas)
+      }
+    }
     .hyScreen()
     .navigationTitle("HyRoute")
     .navigationBarTitleDisplayMode(.inline)
@@ -70,29 +85,34 @@ struct Dashboard: View {
 
   private var connectionCard: some View {
     let active = client.vpnStatus.isActiveTunnel
-    return VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 8) {
-        if pending { ProgressView().tint(HyStyle.accent).accessibilityHidden(true) }
-        else {
-          Circle().fill(active ? HyStyle.success : HyStyle.muted).frame(width: 8, height: 8)
-            .accessibilityHidden(true)
+    let signal = active ? HyStyle.accent : HyStyle.muted
+    return VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 12) {
+        ZStack {
+          Circle().fill(signal.opacity(0.10))
+          Circle().strokeBorder(signal.opacity(0.20), lineWidth: 1)
+          if pending { ProgressView().tint(signal) }
+          else { Image(systemName: "power").font(.system(size: 24, weight: .semibold)).foregroundStyle(signal) }
         }
-        Text(status).font(.subheadline.weight(.semibold))
-          .foregroundStyle(active ? HyStyle.success : HyStyle.muted)
+        .frame(width: 48, height: 48)
+        .accessibilityHidden(true)
+        Text(status).font(.headline.weight(.semibold))
+          .foregroundStyle(active ? HyStyle.accent : HyStyle.ink)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("dashboard-vpn-status")
       }
       if let profile = client.state.selected {
+        Divider().overlay(HyStyle.stroke)
         Button { choosingProfile = true } label: {
           HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-              Text(profile.displayTitle).font(.title2.weight(.semibold))
+              Text(profile.displayTitle).font(.body.weight(.semibold))
                 .foregroundStyle(HyStyle.ink)
                 .fixedSize(horizontal: false, vertical: true)
               Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
             }
             Spacer(minLength: 8)
-            Image(systemName: "arrow.up.arrow.down").font(.subheadline.weight(.semibold))
+            Image(systemName: "chevron.up.chevron.down").font(.subheadline.weight(.semibold))
               .foregroundStyle(HyStyle.accent).accessibilityHidden(true)
           }
           .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -109,18 +129,11 @@ struct Dashboard: View {
         }
         .buttonStyle(HyButton())
         .accessibilityIdentifier("dashboard-add-first-subscription")
-      } else {
-        Button { Task { await client.toggleVPN() } } label: {
-          Label(active ? "Отключить VPN" : "Подключить VPN", systemImage: "power")
-        }
-        .buttonStyle(HyButton(prominent: !active))
-        .disabled(client.vpnBusy || client.vpnStatus == .disconnecting)
-        .accessibilityIdentifier("dashboard-vpn-button")
       }
     }
     .padding(16)
     .background {
-      RoundedRectangle(cornerRadius: 18).fill(HyStyle.surface)
+      RoundedRectangle(cornerRadius: 22).fill(HyStyle.inset)
     }
   }
 }
@@ -198,7 +211,7 @@ private struct DashboardSubscription: View {
           Divider().overlay(HyStyle.stroke).padding(.horizontal, 15)
         }
         ForEach(available) { profile in
-          profileRow(profile).padding(.horizontal, 15)
+          profileRow(profile)
           Divider().overlay(HyStyle.stroke).padding(.horizontal, 15)
         }
         NavigationLink {
@@ -227,23 +240,31 @@ private struct DashboardSubscription: View {
     let selected = selectedID == profile.id
     return Button { Task { _ = await client.select(profile.id) } } label: {
       HStack(spacing: 10) {
+        Image(systemName: profile.balance == true ? "bolt" : "server.rack")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(selected ? HyStyle.accent : HyStyle.muted)
+          .frame(width: 18)
+          .accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 3) {
           Text(profile.displayTitle).font(.subheadline.weight(.semibold))
             .foregroundStyle(HyStyle.ink).fixedSize(horizontal: false, vertical: true)
           Text(profile.transport).font(.caption).foregroundStyle(HyStyle.muted)
-          if let delay {
-            Text(delay).font(.caption.monospacedDigit())
-              .foregroundStyle(rows.contains { $0.ms != nil } ? HyStyle.success : HyStyle.muted)
-              .accessibilityHidden(true)
-          }
         }
-        Spacer(minLength: 0)
+        .layoutPriority(1)
+        Spacer(minLength: 2)
+        if let delay {
+          Text(delay).font(.caption.monospacedDigit())
+            .foregroundStyle(rows.contains { $0.ms != nil } ? HyStyle.success : HyStyle.muted)
+            .accessibilityHidden(true)
+        }
         if selected {
           Image(systemName: "checkmark.circle.fill").foregroundStyle(HyStyle.success)
             .accessibilityHidden(true)
         }
       }
       .frame(minHeight: 49).contentShape(Rectangle())
+      .padding(.horizontal, 15)
+      .background(selected ? HyStyle.accent.opacity(0.08) : .clear)
     }
     .buttonStyle(.plain)
     .disabled(client.busy)

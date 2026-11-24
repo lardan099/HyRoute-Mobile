@@ -34,6 +34,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   String? _selected;
   int _tab = 0;
   var _routingSettings = false;
+  var _subscriptionQuery = '';
   bool _importing = false;
   bool _validating = false;
   bool _loading = true;
@@ -658,9 +659,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         centerTitle: false,
-        title: const Text(
-          'HyRoute',
-          style: TextStyle(fontWeight: FontWeight.w700),
+        title: Text(
+          _tab == 0
+              ? 'HyRoute'
+              : _tab == 1
+              ? 'Серверы'
+              : 'Маршрутизация',
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.5,
+          ),
         ),
         actions: [
           if (_tab == 0 &&
@@ -748,8 +756,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             onDestinationSelected: (tab) => setState(() => _tab = tab),
             destinations: const [
               NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home_rounded),
+                icon: Icon(Icons.power_settings_new_outlined),
+                selectedIcon: Icon(Icons.power_settings_new_rounded),
                 label: 'Главная',
               ),
               NavigationDestination(
@@ -774,30 +782,50 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         .where((server) => server.id == _selected)
         .firstOrNull;
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final connected = _vpnStatus == 'on';
+    final signal = connected ? colors.primary : colors.onSurfaceVariant;
     return [
-      Card(
-        margin: EdgeInsets.zero,
+      Material(
+        color: colors.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(22),
+        clipBehavior: Clip.antiAlias,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: Row(
                 children: [
-                  Icon(
-                    Icons.circle,
-                    size: 9,
-                    color: _vpnStatus == 'on'
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.onSurfaceVariant,
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: signal.withValues(alpha: 0.12),
+                      border: Border.all(color: signal.withValues(alpha: 0.20)),
+                      shape: BoxShape.circle,
+                    ),
+                    child: SizedBox.square(
+                      dimension: 48,
+                      child: Icon(
+                        Icons.power_settings_new_rounded,
+                        color: signal,
+                        size: 25,
+                      ),
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(_vpnTitle, style: theme.textTheme.labelLarge),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _vpnTitle,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: connected ? colors.primary : colors.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
+            const Divider(height: 1, indent: 16, endIndent: 16),
             if (selected == null)
               ListTile(
                 title: const Text('Добавить подписку'),
@@ -808,8 +836,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             else
               ListTile(
                 key: const ValueKey('primary-profile'),
-                title: Text(selected.name, style: theme.textTheme.titleLarge),
-                subtitle: Text(selected.protocol),
+                title: Text(
+                  selected.name,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                subtitle: Text(
+                  selected.protocol,
+                  style: theme.textTheme.bodySmall,
+                ),
                 trailing: const Icon(
                   Icons.swap_vert,
                   semanticLabel: 'Сменить сервер',
@@ -820,7 +856,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ),
       ),
       if (_subscriptions.isNotEmpty) ...[
-        const _SectionTitle('Подписки и серверы'),
+        const _SectionTitle('Серверы'),
         for (final item in _subscriptions) _homeSubscription(context, item),
       ],
     ];
@@ -873,7 +909,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   ),
                   title: Text(
                     item.title.isEmpty ? 'Импортированные серверы' : item.title,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   subtitle: Text('Доступно ${servers.length}'),
                   onTap: () => setState(
@@ -945,7 +981,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   ),
                 ),
               ),
-            for (final server in servers) _homeServer(server),
+            for (final (index, server) in servers.indexed) ...[
+              if (index > 0)
+                const Divider(height: 1, indent: 42, endIndent: 14),
+              _homeServer(server),
+            ],
           ],
         ],
       ),
@@ -959,14 +999,42 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ? '$ms мс'
         : (row == null ? null : probeRowLabel(row));
     final selected = server.id == _selected;
+    final colors = Theme.of(context).colorScheme;
     return ListTile(
       key: ValueKey('home-server-${server.id}'),
       visualDensity: VisualDensity.compact,
+      selected: selected,
+      selectedTileColor: colors.primary.withValues(alpha: 0.08),
+      leading: Icon(
+        server.balance ? Icons.bolt_rounded : Icons.dns_outlined,
+        size: 17,
+      ),
       title: Text(server.name),
-      subtitle: Text([server.protocol, ?delay].join(' · ')),
-      trailing: selected
-          ? const Icon(Icons.check_circle_outline, semanticLabel: 'Выбран')
-          : null,
+      subtitle: Text(server.protocol),
+      trailing: delay == null && !selected
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (delay != null)
+                  Text(
+                    delay,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: ms == null
+                          ? colors.onSurfaceVariant
+                          : colors.primary,
+                    ),
+                  ),
+                if (selected) ...[
+                  if (delay != null) const SizedBox(width: 5),
+                  const Icon(
+                    Icons.check_rounded,
+                    size: 18,
+                    semanticLabel: 'Выбран',
+                  ),
+                ],
+              ],
+            ),
       onTap: _importing || _validating
           ? null
           : () => _saveSettings(selected: server.id),
@@ -1049,9 +1117,31 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   List<Widget> _subscriptionPage(BuildContext context) {
+    final query = _subscriptionQuery.trim().toLowerCase();
+    final visible = _subscriptions.where(
+      (item) =>
+          query.isEmpty ||
+          item.title.toLowerCase().contains(query) ||
+          item.servers.any(
+            (server) =>
+                server.name.toLowerCase().contains(query) ||
+                server.protocol.toLowerCase().contains(query),
+          ),
+    );
     return [
-      const _PageTitle('Подписки'),
-      OutlinedButton.icon(
+      if (_subscriptions.isNotEmpty)
+        TextFormField(
+          key: const ValueKey('subscription-search'),
+          initialValue: _subscriptionQuery,
+          onChanged: (value) => setState(() => _subscriptionQuery = value),
+          textInputAction: TextInputAction.search,
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search_rounded),
+            hintText: 'Найти сервер или подписку',
+          ),
+        ),
+      const SizedBox(height: 10),
+      FilledButton.icon(
         onPressed: _importing || _validating ? null : _import,
         icon: _importing
             ? const SizedBox.square(
@@ -1077,10 +1167,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             subtitle: Text('Импортируйте HTTPS-ссылку, Hysteria 2 или VLESS.'),
           ),
         ),
-      for (final subscription in _subscriptions)
+      if (_subscriptions.isNotEmpty && visible.isEmpty)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 18),
+          child: Text('Серверы и подписки не найдены.'),
+        ),
+      for (final subscription in visible)
         Card(
           child: ExpansionTile(
-            key: PageStorageKey('subscription:${subscription.id}'),
+            key: PageStorageKey((
+              'subscription:${subscription.id}',
+              query.isNotEmpty,
+            )),
+            initiallyExpanded: query.isNotEmpty,
             leading: const Icon(Icons.layers_outlined),
             title: Text(
               subscription.title.isEmpty
@@ -1110,7 +1209,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       : () => _refresh(subscription.id),
                 ),
               SubscriptionDetails(subscription: subscription),
-              for (final server in subscription.servers)
+              for (final server in subscription.servers.where(
+                (server) =>
+                    query.isEmpty ||
+                    subscription.title.toLowerCase().contains(query) ||
+                    server.name.toLowerCase().contains(query) ||
+                    server.protocol.toLowerCase().contains(query),
+              ))
                 ListTile(
                   leading: _ProfileIcon(balance: server.balance),
                   title: Text(server.name),
@@ -1150,28 +1255,36 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   List<Widget> _rulesPage() {
     return [
-      const _PageTitle('Маршрутизация'),
       if (_routing != null) ...[
         Card(
-          child: ListTile(
-            leading: const Icon(Icons.layers_outlined),
-            title: const Text('Профили правил'),
-            subtitle: Text(
-              _routingProfiles
-                      .where((profile) => profile.id == _activeRoutingProfile)
-                      .firstOrNull
-                      ?.name ??
-                  'Основной',
-            ),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: _validating || _importing ? null : _openRuleProfiles,
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.layers_outlined),
+                title: const Text('Профили правил'),
+                subtitle: Text(
+                  _routingProfiles
+                          .where(
+                            (profile) => profile.id == _activeRoutingProfile,
+                          )
+                          .firstOrNull
+                          ?.name ??
+                      'Основной',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: _validating || _importing ? null : _openRuleProfiles,
+              ),
+              const Divider(height: 1, indent: 54, endIndent: 14),
+              ListTile(
+                leading: const Icon(Icons.search_rounded),
+                title: const Text('Проверить адрес'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: _validating || _importing ? null : _openRouteCheck,
+              ),
+            ],
           ),
         ),
-        OutlinedButton.icon(
-          onPressed: _validating || _importing ? null : _openRouteCheck,
-          icon: const Icon(Icons.search),
-          label: const Text('Проверить адрес'),
-        ),
+        const SizedBox(height: 8),
       ],
       FilledButton.icon(
         onPressed: _validating || _importing ? null : () => _editRule(),
@@ -1183,7 +1296,18 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           padding: EdgeInsets.fromLTRB(4, 12, 4, 8),
           child: Text('Срабатывает первое подходящее правило сверху.'),
         ),
-      for (var index = 0; index < _rules.length; index++) _ruleTile(index),
+      if (_rules.isNotEmpty)
+        Card(
+          child: Column(
+            children: [
+              for (var index = 0; index < _rules.length; index++) ...[
+                if (index > 0)
+                  const Divider(height: 1, indent: 54, endIndent: 14),
+                _ruleTile(index),
+              ],
+            ],
+          ),
+        ),
     ];
   }
 
@@ -1283,28 +1407,26 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final label = rule.server.isEmpty
         ? rule.action.label
         : _serverName(rule.server);
-    return Card(
-      child: ListTile(
-        leading: Icon(switch (rule.action) {
-          RouteAction.tunnel => Icons.vpn_lock_outlined,
-          RouteAction.direct => Icons.open_in_new_rounded,
-          RouteAction.block => Icons.block_rounded,
-        }),
-        title: Text(rule.title),
-        subtitle: Text(label),
-        onTap: _validating ? null : () => _editRule(index),
-        trailing: PopupMenuButton<String>(
-          tooltip: 'Действия с правилом',
-          enabled: !_validating,
-          onSelected: (action) => _ruleAction(index, action),
-          itemBuilder: (_) => [
-            if (index > 0)
-              const PopupMenuItem(value: 'up', child: Text('Поднять выше')),
-            if (index < _rules.length - 1)
-              const PopupMenuItem(value: 'down', child: Text('Опустить ниже')),
-            const PopupMenuItem(value: 'delete', child: Text('Удалить')),
-          ],
-        ),
+    return ListTile(
+      leading: Icon(switch (rule.action) {
+        RouteAction.tunnel => Icons.vpn_lock_outlined,
+        RouteAction.direct => Icons.open_in_new_rounded,
+        RouteAction.block => Icons.block_rounded,
+      }),
+      title: Text(rule.title),
+      subtitle: Text(label),
+      onTap: _validating ? null : () => _editRule(index),
+      trailing: PopupMenuButton<String>(
+        tooltip: 'Действия с правилом',
+        enabled: !_validating,
+        onSelected: (action) => _ruleAction(index, action),
+        itemBuilder: (_) => [
+          if (index > 0)
+            const PopupMenuItem(value: 'up', child: Text('Поднять выше')),
+          if (index < _rules.length - 1)
+            const PopupMenuItem(value: 'down', child: Text('Опустить ниже')),
+          const PopupMenuItem(value: 'delete', child: Text('Удалить')),
+        ],
       ),
     );
   }
@@ -1451,7 +1573,7 @@ class _SectionTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 21, 4, 8),
+      padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
       child: Text(
         text,
         style: Theme.of(
