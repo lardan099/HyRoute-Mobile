@@ -49,7 +49,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   final _expandedSubscriptions = <String, bool>{};
   final _sortLatency = <String>{};
   final _latencies = <String, List<Map<String, dynamic>>>{};
-  String? _inlineProbe;
+  final _expandedProbeGroups = <String>{};
+  ({String subscription, String? server})? _inlineProbe;
   String? _probeError;
   var _cancelInlineProbe = false;
 
@@ -68,20 +69,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     return core is RoutingControl ? core as RoutingControl : null;
   }
 
-  void _openProbe(String scope, String id) {
-    final core = _diagnostics;
-    if (core == null || _inlineProbe != null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ProbePage(core: core, scope: scope, id: id),
-      ),
-    );
-  }
-
-  Future<void> _checkSubscription(Subscription subscription) async {
+  Future<void> _checkLatency(
+    Subscription subscription, {
+    Server? server,
+  }) async {
     final core = _diagnostics;
     if (core == null) return;
-    if (_inlineProbe == subscription.id) {
+    final target = (subscription: subscription.id, server: server?.id);
+    if (_inlineProbe == target) {
       setState(() => _cancelInlineProbe = true);
       return;
     }
@@ -90,15 +85,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final previous = {..._latencies};
     setState(() {
       _expandedSubscriptions[subscription.id] = true;
-      _inlineProbe = subscription.id;
+      _inlineProbe = target;
+      if (server != null && server.balance) _expandedProbeGroups.add(server.id);
       _cancelInlineProbe = false;
       _probeError = null;
     });
     try {
       await pollProbe(
         core,
-        'subscription',
-        subscription.id,
+        server == null ? 'subscription' : 'profile',
+        server?.id ?? subscription.id,
         active: () => mounted && !_cancelInlineProbe,
         report: (snapshot) {
           final rows = <String, List<Map<String, dynamic>>>{};
@@ -853,7 +849,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final expanded =
         _expandedSubscriptions[item.id] ??
         servers.any((server) => server.id == _selected);
-    final probing = _inlineProbe == item.id;
+    final probing = _inlineProbe == (subscription: item.id, server: null);
     final canMeasure = _diagnostics != null && servers.isNotEmpty;
     final hasLatency = servers.any((server) => _latency(server.id) != null);
     final sort = _sortLatency.contains(item.id) && hasLatency;
@@ -919,10 +915,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     onPressed: probing
                         ? (_cancelInlineProbe
                               ? null
-                              : () => _checkSubscription(item))
+                              : () => _checkLatency(item))
                         : _inlineProbe != null || _importing || _validating
                         ? null
-                        : () => _checkSubscription(item),
+                        : () => _checkLatency(item),
                   ),
                 ),
             ],
@@ -1159,83 +1155,144 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           child: Text('Серверы и подписки не найдены.'),
         ),
       for (final subscription in visible)
-        Card(
-          child: ExpansionTile(
-            key: PageStorageKey((
-              'subscription:${subscription.id}',
-              query.isNotEmpty,
-            )),
-            initiallyExpanded: query.isNotEmpty,
-            leading: const Icon(Icons.layers_outlined),
-            title: Text(
-              subscription.title.isEmpty
-                  ? 'Импортированные серверы'
-                  : subscription.title,
+        _subscriptionCard(subscription, query),
+    ];
+  }
+
+  Widget _subscriptionCard(Subscription subscription, String query) {
+    final probing = _inlineProbe?.subscription == subscription.id;
+    final batch = _inlineProbe == (subscription: subscription.id, server: null);
+    final servers = subscription.servers.where(
+      (server) =>
+          query.isEmpty ||
+          subscription.title.toLowerCase().contains(query) ||
+          server.name.toLowerCase().contains(query) ||
+          server.protocol.toLowerCase().contains(query),
+    );
+    return Card(
+      child: ExpansionTile(
+        key: PageStorageKey((
+          'subscription:${subscription.id}',
+          query.isNotEmpty,
+        )),
+        initiallyExpanded: query.isNotEmpty,
+        title: Text(
+          subscription.title.isEmpty
+              ? 'Импортированные серверы'
+              : subscription.title,
+        ),
+        children: [
+          if (_diagnostics != null &&
+              subscription.servers.any((server) => !server.missing))
+            ListTile(
+              leading: Icon(batch ? Icons.stop_circle_outlined : Icons.speed),
+              title: Text(
+                batch
+                    ? 'Остановить замер'
+                    : subscription.id == 'server-groups'
+                    ? 'Проверить все группы'
+                    : 'Проверить всю подписку',
+              ),
+              onTap:
+                  (_inlineProbe == null && !_importing && !_validating) ||
+                      (batch && !_cancelInlineProbe)
+                  ? () => _checkLatency(subscription)
+                  : null,
             ),
+          if (probing) const LinearProgressIndicator(),
+          if (_probeError == subscription.id)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Text(
+                'Не удалось измерить задержку',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+          if (subscription.canRefresh)
+            ListTile(
+              leading: const Icon(Icons.refresh_rounded),
+              title: const Text('Обновить подписку'),
+              onTap: _importing || _validating || probing
+                  ? null
+                  : () => _refresh(subscription.id),
+            ),
+          SubscriptionDetails(subscription: subscription),
+          for (final server in servers)
+            _subscriptionServer(subscription, server),
+        ],
+      ),
+    );
+  }
+
+  Widget _subscriptionServer(Subscription subscription, Server server) {
+    final running =
+        _inlineProbe == (subscription: subscription.id, server: server.id);
+    final rows = _latencies[server.id] ?? const [];
+    final delay = _latency(server.id);
+    final status = delay == null
+        ? (rows.isEmpty ? null : probeRowLabel(rows.first))
+        : '$delay мс';
+    return Column(
+      children: [
+        ListTile(
+          title: Text(server.name),
+          subtitle: Text(
+            [
+              server.protocol,
+              if (server.host.isNotEmpty) server.host,
+              ?status,
+            ].join(' · '),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (_diagnostics != null &&
-                  subscription.servers.any((server) => !server.missing))
-                ListTile(
-                  leading: const Icon(Icons.speed),
-                  title: Text(
-                    subscription.id == 'server-groups'
-                        ? 'Проверить все группы'
-                        : 'Проверить всю подписку',
+              if (server.id == _selected)
+                const Icon(Icons.check_rounded, semanticLabel: 'Выбран'),
+              if (_diagnostics != null && !server.missing)
+                IconButton(
+                  icon: Icon(
+                    running ? Icons.stop_circle_outlined : Icons.speed,
                   ),
-                  onTap: _inlineProbe != null
-                      ? null
-                      : () => _openProbe('subscription', subscription.id),
-                ),
-              if (subscription.canRefresh)
-                ListTile(
-                  leading: const Icon(Icons.refresh_rounded),
-                  title: const Text('Обновить подписку'),
-                  onTap: _importing || _validating
-                      ? null
-                      : () => _refresh(subscription.id),
-                ),
-              SubscriptionDetails(subscription: subscription),
-              for (final server in subscription.servers.where(
-                (server) =>
-                    query.isEmpty ||
-                    subscription.title.toLowerCase().contains(query) ||
-                    server.name.toLowerCase().contains(query) ||
-                    server.protocol.toLowerCase().contains(query),
-              ))
-                ListTile(
-                  title: Text(server.name),
-                  subtitle: Text(
-                    [
-                      server.protocol,
-                      if (server.host.isNotEmpty) server.host,
-                    ].join(' · '),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (server.id == _selected)
-                        const Icon(Icons.check_circle_outline),
-                      if (_diagnostics != null && !server.missing)
-                        IconButton(
-                          icon: const Icon(Icons.speed),
-                          tooltip: server.balance
-                              ? 'Проверить узлы группы'
-                              : 'Проверить задержку',
-                          onPressed: _inlineProbe != null
-                              ? null
-                              : () => _openProbe('profile', server.id),
-                        ),
-                    ],
-                  ),
-                  enabled: !server.missing,
-                  onTap: server.missing || _importing || _validating
-                      ? null
-                      : () => _saveSettings(selected: server.id),
+                  tooltip: running
+                      ? 'Остановить замер'
+                      : server.balance
+                      ? 'Проверить узлы группы'
+                      : 'Проверить задержку',
+                  onPressed:
+                      (_inlineProbe == null && !_importing && !_validating) ||
+                          (running && !_cancelInlineProbe)
+                      ? () => _checkLatency(subscription, server: server)
+                      : null,
                 ),
             ],
           ),
+          enabled: !server.missing,
+          onTap: server.missing || _importing || _validating
+              ? null
+              : () => _saveSettings(selected: server.id),
         ),
-    ];
+        if (server.balance && rows.isNotEmpty)
+          ExpansionTile(
+            key: PageStorageKey(('probe-nodes', server.id)),
+            initiallyExpanded: _expandedProbeGroups.contains(server.id),
+            onExpansionChanged: (expanded) {
+              if (expanded) {
+                _expandedProbeGroups.add(server.id);
+              } else {
+                _expandedProbeGroups.remove(server.id);
+              }
+            },
+            title: Text('Результаты по узлам · ${rows.length}'),
+            children: [
+              for (final row in rows)
+                ListTile(
+                  title: Text(row['host'] as String? ?? 'Узел'),
+                  trailing: Text(probeRowLabel(row)),
+                ),
+            ],
+          ),
+      ],
+    );
   }
 
   List<Widget> _rulesPage() {

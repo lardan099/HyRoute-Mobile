@@ -107,9 +107,18 @@ class _DiagnosticsTestCore extends _TestCore
   }
 
   @override
-  Future<ProbeSnapshot> probeStatus() async => const ProbeSnapshot(true, [
-    {'name': 'Узел', 'host': 'vpn.example', 'status': 'ok', 'ms': 42},
-  ]);
+  Future<ProbeSnapshot> probeStatus() async {
+    final (scope, id) = probes.last;
+    return ProbeSnapshot(true, [
+      {
+        'profileId': scope == 'subscription' ? 'fi' : id,
+        'name': 'Узел',
+        'host': 'vpn.example',
+        'status': 'ok',
+        'ms': 42,
+      },
+    ]);
+  }
 
   @override
   Future<void> cancelProbe() async {}
@@ -467,7 +476,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('opens the VPN journal and checks servers at each scope', (
+  testWidgets('checks a subscription, group and server on the same screen', (
     tester,
   ) async {
     final core = _DiagnosticsTestCore();
@@ -486,16 +495,17 @@ void main() {
     await _tap(tester, 'Обновить подписку');
     await _tap(tester, 'Финляндия');
     await _tap(tester, 'Проверить всю подписку');
-    expect(find.text('vpn.example · 42 мс'), findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
+    expect(find.text('VLESS · 42 мс'), findsOneWidget);
+    expect(find.text('Задержка серверов'), findsNothing);
 
     await tester.tap(find.byTooltip('Проверить узлы группы'));
     await tester.pumpAndSettle();
-    await tester.pageBack();
-    await tester.pumpAndSettle();
+    expect(find.text('vpn.example'), findsOneWidget);
+    expect(find.text('Задержка серверов'), findsNothing);
     await tester.tap(find.byTooltip('Проверить задержку').first);
     await tester.pumpAndSettle();
+    expect(find.text('Hysteria 2 · 42 мс'), findsOneWidget);
+    expect(find.text('Задержка серверов'), findsNothing);
     expect(core.probes, [
       ('subscription', 'test'),
       ('profile', 'auto'),
@@ -566,6 +576,7 @@ void main() {
       'https://example.org/page?token=test',
     );
     expect(find.textContaining('Проверьте сайт'), findsOneWidget);
+    expect(find.textContaining('Проверьте сайт').hitTestable(), findsOneWidget);
     core.rejectSave = false;
     await _tap(tester, 'Сохранить');
     expect(jsonDecode(core.configuration!)['rules'].single, {
