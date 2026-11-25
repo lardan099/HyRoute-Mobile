@@ -241,12 +241,13 @@ func (p *VPNPlan) RulePackages() string { return p.router.AndroidPackages() }
 func (p *VPNPlan) DNSServer() string    { return vpnDNS }
 
 type vpnConfiguration struct {
-	plan      *VPNPlan
-	xray      map[string]any
-	balancers map[string]bool
-	labels    map[string]string
-	traffic   *trafficJournal
-	health    *chainHealth
+	plan               *VPNPlan
+	xray               map[string]any
+	balancers          map[string]bool
+	initialGroupChecks map[string][]string
+	labels             map[string]string
+	traffic            *trafficJournal
+	health             *chainHealth
 }
 
 func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(context.Context, string) netip.Addr) (*vpnConfiguration, error) {
@@ -262,6 +263,7 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	var balances, routeRules []any
 	var observation *vless.Balance
 	balancers := make(map[string]bool)
+	initialGroupChecks := make(map[string][]string)
 	labels := map[string]string{directTag: "Напрямую", blockTag: "Блокировка", splitDNSTag: "Раздельный DNS"}
 	resolved := make(map[string]netip.Addr)
 	resolveOnce := func(host string) netip.Addr {
@@ -293,12 +295,15 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 		tag := target.tag + "-balancer"
 		var balance vless.Balance
 		if len(target.group) > 0 {
-			nodes, config, err := p.groupOutbounds(target, prefix, tag, resolveOnce, labels)
+			nodes, config, primaryTags, err := p.groupOutbounds(target, prefix, tag, resolveOnce, labels)
 			if err != nil {
 				return nil, err
 			}
 			outbounds = append(outbounds, nodes...)
 			balances = append(balances, config)
+			if len(nodes) > 1 {
+				initialGroupChecks[tag] = primaryTags
+			}
 		} else {
 			balance = *profile.Balance
 			ips := make([]netip.Addr, len(balance.Nodes))
@@ -343,7 +348,9 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	if observation != nil {
 		config["burstObservatory"] = observation.Observatory(prefixes)
 	}
-	prepared := &vpnConfiguration{plan: p, xray: config, balancers: balancers, labels: labels}
+	prepared := &vpnConfiguration{
+		plan: p, xray: config, balancers: balancers, initialGroupChecks: initialGroupChecks, labels: labels,
+	}
 	if !p.android {
 		prepared.traffic = new(trafficJournal)
 		prepared.health = newChainHealth(outbounds)
@@ -351,8 +358,9 @@ func (p *VPNPlan) configuration(ctx context.Context, tunnel bool, resolve func(c
 	return prepared, nil
 }
 
-func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve func(string) netip.Addr, labels map[string]string) ([]any, map[string]any, error) {
+func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve func(string) netip.Addr, labels map[string]string) ([]any, map[string]any, []string, error) {
 	var outbounds []any
+	var primaryTags []string
 	var fallback string
 	for i, member := range target.group {
 		ip := resolve(member.profile.Host)
@@ -379,17 +387,20 @@ func (p *VPNPlan) groupOutbounds(target vpnProfile, prefix, tag string, resolve 
 		if member.reserve {
 			fallback = memberTag
 			labels[memberTag] += " (резерв)"
-		} else if fallback == "" {
-			fallback = memberTag
+		} else {
+			primaryTags = append(primaryTags, memberTag)
+			if fallback == "" {
+				fallback = memberTag
+			}
 		}
 	}
 	if len(outbounds) == 0 {
-		return nil, nil, errors.New("серверы группы недоступны")
+		return nil, nil, nil, errors.New("серверы группы недоступны")
 	}
 	return outbounds, map[string]any{
 		"tag": tag, "selector": []string{prefix}, "fallbackTag": fallback,
 		"strategy": map[string]any{"type": "leastPing"},
-	}, nil
+	}, primaryTags, nil
 }
 
 func profileOutbound(p hysteria.Profile, ip netip.Addr, tag string) (map[string]any, error) {

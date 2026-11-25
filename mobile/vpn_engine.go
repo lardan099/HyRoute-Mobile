@@ -103,7 +103,11 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return &vpnFlowRouter{Router: delegate.(routing.Router), vpnContextValue: state}, nil
+		router := &vpnFlowRouter{Router: delegate.(routing.Router), vpnContextValue: state}
+		if err := router.prepareGroupChecks(ctx); err != nil {
+			return nil, err
+		}
+		return router, nil
 	}))
 	common.Must(common.RegisterConfig((*wrapperspb.StringValue)(nil), func(ctx context.Context, raw any) (any, error) {
 		if raw.(*wrapperspb.StringValue).Value == probeTag {
@@ -231,6 +235,7 @@ func (p *vpnConfiguration) start(ctx context.Context, hooks VPNPlatform) (*core.
 type vpnFlowRouter struct {
 	routing.Router
 	vpnContextValue
+	groupChecks map[string]*initialGroupCheck
 }
 
 type vpnFlowRoute struct {
@@ -244,6 +249,9 @@ func (r vpnFlowRoute) GetRuleTag() string             { return "" }
 
 func (r *vpnFlowRouter) PickRoute(ctx routing.Context) (routing.Route, error) {
 	if r.configuration.balancers[ctx.GetInboundTag()] {
+		if check := r.groupChecks[ctx.GetInboundTag()]; check != nil {
+			check.wait.Do(check.awaitResults)
+		}
 		return r.Router.PickRoute(ctx)
 	}
 	return vpnFlowRoute{ctx, r.route(ctx)}, nil
